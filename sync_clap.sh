@@ -54,6 +54,7 @@ fi
 # ── Defaults ──────────────────────────────────────────────────────────────────
 SEARCH_START=0
 SEARCH_END=30
+USE_TIMESTAMP=false
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 POSITIONALS=()
@@ -61,9 +62,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --search-start) SEARCH_START="$2"; shift 2 ;;
         --search-end)   SEARCH_END="$2";   shift 2 ;;
+        --timestamp)    USE_TIMESTAMP=true; shift ;;
         --*)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--search-start N] [--search-end N] background.mp4 screen.mp4"
+            echo "Usage: $0 [--search-start N] [--search-end N] [--timestamp] background.mp4 screen.mp4"
             exit 1 ;;
         *) POSITIONALS+=("$1"); shift ;;
     esac
@@ -73,7 +75,7 @@ BG="${POSITIONALS[0]:-}"
 SCR="${POSITIONALS[1]:-}"
 
 if [ -z "$BG" ] || [ -z "$SCR" ]; then
-    echo "Usage: $0 [--search-start N] [--search-end N] background.mp4 screen.mp4"
+    echo "Usage: $0 [--search-start N] [--search-end N] [--timestamp] background.mp4 screen.mp4"
     exit 1
 fi
 
@@ -85,6 +87,53 @@ fi
 if [ ! -f "$SCR" ]; then
     echo "Error: screen recording not found: $SCR"
     exit 1
+fi
+
+# ── Timestamp sync mode ───────────────────────────────────────────────────────
+if $USE_TIMESTAMP; then
+    BG_CTIME=$(ffprobe -v error -show_entries format_tags=creation_time \
+        -of csv=p=0 "$BG" 2>/dev/null | head -1)
+    SCR_CTIME=$(ffprobe -v error -show_entries format_tags=creation_time \
+        -of csv=p=0 "$SCR" 2>/dev/null | head -1)
+
+    if [ -z "$BG_CTIME" ]; then
+        echo "Error: background clip has no creation_time metadata: $BG"
+        exit 1
+    fi
+    if [ -z "$SCR_CTIME" ]; then
+        echo "Error: screen recording has no creation_time metadata: $SCR"
+        exit 1
+    fi
+
+    RESULT=$(python3 - "$BG_CTIME" "$SCR_CTIME" <<'PYEOF'
+import sys
+from datetime import datetime
+def parse_ts(s):
+    return datetime.fromisoformat(s.strip().replace('Z', '+00:00'))
+bg_t = parse_ts(sys.argv[1])
+scr_t = parse_ts(sys.argv[2])
+offset = (scr_t - bg_t).total_seconds()
+if offset >= 0:
+    print(f"BG_TIME {offset:.3f}")
+    print("SCR_TIME 0.000")
+else:
+    print("BG_TIME 0.000")
+    print(f"SCR_TIME {-offset:.3f}")
+PYEOF
+    )
+
+    BG_TIME=$(echo "$RESULT" | awk '/^BG_TIME/  {print $2}')
+    SCR_TIME=$(echo "$RESULT" | awk '/^SCR_TIME/ {print $2}')
+
+    echo "Background timestamp: $BG_CTIME"
+    echo "Screen timestamp:     $SCR_CTIME"
+    echo "Note: timestamp precision is typically 1 second; result may be off by ±1s"
+    echo ""
+    echo "SYNC bg=${BG_TIME} scr=${SCR_TIME}"
+    echo ""
+    echo "Suggested command:"
+    echo "  composite_bezel --bg-start ${BG_TIME} --scr-start ${SCR_TIME} \"${BG}\" \"${SCR}\""
+    exit 0
 fi
 
 # ── Validate audio streams ────────────────────────────────────────────────────

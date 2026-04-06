@@ -3,7 +3,7 @@ Detect a sync clap in two video files and produce `--bg-start` / `--scr-start` o
 ## Your job when this skill is invoked
 
 1. If the user hasn't provided both files, ask: "Which file is the background and which is the screen recording?"
-2. Ask about `--search-start` / `--search-end` only if the user says the clap isn't near the start of both clips, or if a previous run warned about no clear transient.
+2. If the user says there's no clap, use `--timestamp` instead of audio detection. Ask about `--search-start` / `--search-end` only if using clap mode and the user says the clap isn't near the start of both clips, or if a previous run warned about no clear transient.
 3. Run `sync_clap` and capture its output (use the Bash tool and capture stdout).
 4. Check the output for any `WARN:` lines. If any are present, show the user the warning and ask whether to continue before running `composite_bezel`. Do not silently proceed.
 5. Parse the `SYNC bg=N scr=N` line from the output. Extract the two values using a regex or awk — the format is always `SYNC bg=<float> scr=<float>`.
@@ -13,12 +13,13 @@ Detect a sync clap in two video files and produce `--bg-start` / `--scr-start` o
 ## Command
 
 ```bash
-sync_clap [--search-start N] [--search-end N] "<background>" "<screen_recording>"
+sync_clap [--search-start N] [--search-end N] [--timestamp] "<background>" "<screen_recording>"
 ```
 
 Options:
 - `--search-start N` — seconds into both clips to begin looking for the clap (default `0`)
 - `--search-end N` — seconds into both clips to stop looking (default `30`). The clap must be within this window; use a tight range if there is ambient noise before the clap.
+- `--timestamp` — skip audio detection; sync using file `creation_time` metadata instead. Use when there is no clap. Requires both files to have `creation_time` metadata (all iPhone/iPad recordings do). Accurate to ±1 second.
 
 ## Output parsing
 
