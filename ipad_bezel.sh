@@ -38,8 +38,12 @@ if [ "$1" = "update" ]; then
     exit 0
 fi
 
-# Require GPU binary (Apple Silicon only)
-if ! command -v composite_bezel_gpu &>/dev/null; then
+# Locate GPU binary — prefer co-located binary in install dir, fall back to PATH
+if [ -f "$SCRIPT_DIR/composite_bezel_gpu" ] && [ -x "$SCRIPT_DIR/composite_bezel_gpu" ]; then
+    GPU_BIN="$SCRIPT_DIR/composite_bezel_gpu"
+elif command -v composite_bezel_gpu &>/dev/null; then
+    GPU_BIN="$(command -v composite_bezel_gpu)"
+else
     echo "Error: composite_bezel_gpu not found. ipad_bezel requires Apple Silicon." >&2
     echo "Run 'ipad_bezel update' to install the GPU binary." >&2
     exit 1
@@ -48,14 +52,16 @@ fi
 # Background color for the area around the bezel (default: black)
 # Use --bg greenscreen for a chroma-key green you can key out in Resolve
 BG_COLOR="black"
+DURATION_OVERRIDE=""
 
 POSITIONALS=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --bg)    BG_COLOR="$2"; shift 2 ;;
+        --bg)       BG_COLOR="$2"; shift 2 ;;
+        --duration) DURATION_OVERRIDE="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--bg black|greenscreen|0xRRGGBB] input.mp4 [output.mp4]"
+            echo "Usage: $0 [--bg black|greenscreen|0xRRGGBB] [--duration N] input.mp4 [output.mp4]"
             exit 1 ;;
         *) POSITIONALS+=("$1"); shift ;;
     esac
@@ -87,20 +93,21 @@ fi
 
 # Probe input: bitrate and duration
 INPUT_BITRATE=$(ffprobe -v error -select_streams v:0 \
-    -show_entries stream=bit_rate -of csv=p=0 "$INPUT" 2>/dev/null)
+    -show_entries stream=bit_rate -of csv=p=0 "$INPUT" 2>/dev/null | tr -d ',')
 if [ -z "$INPUT_BITRATE" ] || [ "$INPUT_BITRATE" = "N/A" ]; then
     INPUT_BITRATE=$(ffprobe -v error -show_entries format=bit_rate \
-        -of csv=p=0 "$INPUT" 2>/dev/null)
+        -of csv=p=0 "$INPUT" 2>/dev/null | tr -d ',')
 fi
 if [ -z "$INPUT_BITRATE" ] || [ "$INPUT_BITRATE" = "N/A" ]; then
     INPUT_BITRATE=8000000
 fi
 
-DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)
-if [ -z "$DURATION" ]; then
+FULL_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)
+if [ -z "$FULL_DURATION" ]; then
     echo "Error: could not probe input duration: $INPUT"
     exit 1
 fi
+DURATION="${DURATION_OVERRIDE:-$FULL_DURATION}"
 
 HAS_AUDIO=$(ffprobe -v error -select_streams a:0 \
     -show_entries stream=codec_type -of csv=p=0 "$INPUT" 2>/dev/null)
@@ -121,9 +128,10 @@ trap 'rm -f "$TEMP_VIDEO"' EXIT
 
 GPU_ARGS=("$INPUT" --bezel "$BEZEL" --output "$TEMP_VIDEO")
 GPU_ARGS+=(--bg-color "$HEX_COLOR" --bitrate "$OUTPUT_BITRATE")
+[ -n "$DURATION_OVERRIDE" ] && GPU_ARGS+=(--duration "$DURATION_OVERRIDE")
 
-echo "GPU path: composite_bezel_gpu"
-composite_bezel_gpu "${GPU_ARGS[@]}"
+echo "GPU path: $GPU_BIN"
+"$GPU_BIN" "${GPU_ARGS[@]}"
 if [ $? -ne 0 ]; then echo "Error: GPU compositing failed" >&2; exit 1; fi
 
 # ── Audio mux pass ─────────────────────────────────────────────────────────────

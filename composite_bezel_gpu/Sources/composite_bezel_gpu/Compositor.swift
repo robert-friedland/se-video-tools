@@ -287,7 +287,7 @@ final class Compositor: @unchecked Sendable {
                     fputs(
                         "\rFrame \(frameCount)/\(totalF) (\(pct)%) — \(String(format: "%.1f", fps)) fps" +
                         " — \(String(format: "%.1f", rtMultiplier))× real-time" +
-                        " — elapsed \(Int(elapsed))s / ETA \(Int(etaSecs))s   ",
+                        " — \(Self.fmtETA(etaSecs))   ",
                         stderr
                     )
                 }
@@ -579,12 +579,32 @@ final class Compositor: @unchecked Sendable {
                     fputs(
                         "\rFrame \(frameCount)/\(totalF) (\(pct)%) — \(String(format: "%.1f", fps)) fps" +
                         " — \(String(format: "%.1f", rtMultiplier))× real-time" +
-                        " — elapsed \(Int(elapsed))s / ETA \(Int(etaSecs))s   ",
+                        " — \(Self.fmtETA(etaSecs))   ",
                         stderr
                     )
                 }
             }
         }
+    }
+
+    // ── Progress helpers ───────────────────────────────────────────────────────
+
+    private static func fmtDur(_ s: Double) -> String {
+        let n = Int(s)
+        let h = n / 3600, m = (n % 3600) / 60, sec = n % 60
+        if h > 0 { return "\(h)hr \(m)m \(sec)s" }
+        if m > 0 { return "\(m)m \(sec)s" }
+        return "\(sec)s"
+    }
+
+    private static func fmtETA(_ etaSecs: Double) -> String {
+        guard etaSecs > 0 else { return "ETA ..." }
+        let etaDate = Date().addingTimeInterval(etaSecs)
+        let fmt = DateFormatter()
+        fmt.dateFormat = "h:mma"
+        fmt.amSymbol = "am"
+        fmt.pmSymbol = "pm"
+        return "ETA \(fmt.string(from: etaDate)) (\(fmtDur(etaSecs)))"
     }
 
     // ── Rotation helpers ───────────────────────────────────────────────────────

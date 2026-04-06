@@ -52,8 +52,12 @@ if [ "$1" = "update" ]; then
     exit 0
 fi
 
-# Require GPU binary (Apple Silicon only)
-if ! command -v composite_bezel_gpu &>/dev/null; then
+# Locate GPU binary — prefer co-located binary in install dir, fall back to PATH
+if [ -f "$SCRIPT_DIR/composite_bezel_gpu" ] && [ -x "$SCRIPT_DIR/composite_bezel_gpu" ]; then
+    GPU_BIN="$SCRIPT_DIR/composite_bezel_gpu"
+elif command -v composite_bezel_gpu &>/dev/null; then
+    GPU_BIN="$(command -v composite_bezel_gpu)"
+else
     echo "Error: composite_bezel_gpu not found. composite_bezel requires Apple Silicon." >&2
     echo "Run 'composite_bezel update' to install the GPU binary." >&2
     exit 1
@@ -312,8 +316,8 @@ GPU_ARGS+=(--overlay-scale "$OVERLAY_SCALE" --margin "$MARGIN")
 [ -n "$SCR_ROTATION_OVERRIDE" ] && GPU_ARGS+=(--scr-rotation "$SCR_ROTATION_OVERRIDE")
 GPU_ARGS+=(--audio "$AUDIO_MODE")
 
-echo "GPU path: composite_bezel_gpu"
-composite_bezel_gpu "${GPU_ARGS[@]}"
+echo "GPU path: $GPU_BIN"
+"$GPU_BIN" "${GPU_ARGS[@]}"
 if [ $? -ne 0 ]; then echo "Error: GPU compositing failed" >&2; exit 1; fi
 
 # Second pass: audio mux from original source files
