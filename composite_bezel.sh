@@ -63,6 +63,8 @@ DURATION_OVERRIDE=""
 AUDIO_MODE="both"  # both | bg | screen | none
 JOBS_OVERRIDE=""
 OUTPUT_WIDTH=""
+BG_ROTATION_OVERRIDE=""
+SCR_ROTATION_OVERRIDE=""
 
 # Parse args — flags may appear anywhere (before or after positionals)
 POSITIONALS=()
@@ -78,6 +80,8 @@ while [ $# -gt 0 ]; do
         --audio)         AUDIO_MODE="$2";    shift 2 ;;
         --jobs)          JOBS_OVERRIDE="$2";    shift 2 ;;
         --output-width)  OUTPUT_WIDTH="$2";    shift 2 ;;
+        --bg-rotation)   BG_ROTATION_OVERRIDE="$2";  shift 2 ;;
+        --scr-rotation)  SCR_ROTATION_OVERRIDE="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1"
             echo "Usage: $0 [--overlay-scale 0.7] [--x N] [--y N] [--margin 40] [--bg-start N] [--scr-start N] [--duration N] background.mp4 screen.mp4 [output.mp4]"
@@ -319,6 +323,8 @@ if command -v composite_bezel_gpu &>/dev/null; then
     [ -n "$OVL_Y_OVERRIDE" ] && GPU_ARGS+=(--y "$OVL_Y_OVERRIDE")
     [ -n "$DURATION_OVERRIDE" ] && GPU_ARGS+=(--duration "$DURATION_OVERRIDE")
     [ -n "$OUTPUT_WIDTH" ] && GPU_ARGS+=(--output-width "$OUTPUT_WIDTH")
+    [ -n "$BG_ROTATION_OVERRIDE" ]  && GPU_ARGS+=(--bg-rotation  "$BG_ROTATION_OVERRIDE")
+    [ -n "$SCR_ROTATION_OVERRIDE" ] && GPU_ARGS+=(--scr-rotation "$SCR_ROTATION_OVERRIDE")
     GPU_ARGS+=(--audio "$AUDIO_MODE")
 
     echo "GPU path: composite_bezel_gpu"

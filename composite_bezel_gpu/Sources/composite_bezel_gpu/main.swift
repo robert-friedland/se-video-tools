@@ -61,6 +61,14 @@ struct CompositeBezelGPU: ParsableCommand {
     @Option(name: .customLong("output-width"), help: "Scale output to this width (e.g. 1920)")
     var outputWidth: Int?
 
+    @Option(name: .customLong("bg-rotation"),
+            help: "Override background rotation in degrees CW (0/90/180/270); auto-detected from track metadata if omitted")
+    var bgRotation: Int?
+
+    @Option(name: .customLong("scr-rotation"),
+            help: "Override screen recording rotation in degrees CW (0/90/180/270); auto-detected from track metadata if omitted")
+    var scrRotation: Int?
+
     // ── Run ─────────────────────────────────────────────────────────────────────
     func run() throws {
         let bgURL    = URL(fileURLWithPath: background)
@@ -109,6 +117,20 @@ struct CompositeBezelGPU: ParsableCommand {
         let bgEffSize  = effectiveSize(naturalSize: bgNatSize,  transform: bgTransform)
         let scrEffSize = effectiveSize(naturalSize: scrNatSize, transform: scrTransform)
 
+        // Apply rotation overrides: when specified, recompute effective size from the
+        // override angle (90°/270° → transpose width/height; 0°/180° → keep as-is).
+        let finalBgEffSize: CGSize = bgRotation.map { deg in
+            deg % 180 != 0
+                ? CGSize(width: bgNatSize.height, height: bgNatSize.width)
+                : bgNatSize
+        } ?? bgEffSize
+
+        let finalScrEffSize: CGSize = scrRotation.map { deg in
+            deg % 180 != 0
+                ? CGSize(width: scrNatSize.height, height: scrNatSize.width)
+                : scrNatSize
+        } ?? scrEffSize
+
         // Background bitrate (stream → container → floor)
         var bgBitrate = Int(bgTrack.estimatedDataRate)
         if bgBitrate == 0 {
@@ -138,8 +160,8 @@ struct CompositeBezelGPU: ParsableCommand {
 
         // Dimension calculations
         let dims = DimensionCalc(
-            bgEffW:       Int(bgEffSize.width),
-            bgEffH:       Int(bgEffSize.height),
+            bgEffW:       Int(finalBgEffSize.width),
+            bgEffH:       Int(finalBgEffSize.height),
             outputWidth:  outputWidth,
             overlayScale: overlayScale,
             margin:       margin,
@@ -148,8 +170,8 @@ struct CompositeBezelGPU: ParsableCommand {
         )
 
         // Summary
-        fputs("Background:      \(Int(bgEffSize.width))x\(Int(bgEffSize.height)) — \(String(format: "%.1f", bgDuration))s @ \(bgBitrate)bps\n", stderr)
-        fputs("Screen:          \(Int(scrEffSize.width))x\(Int(scrEffSize.height)) — \(String(format: "%.1f", scrDuration))s\n", stderr)
+        fputs("Background:      \(Int(finalBgEffSize.width))x\(Int(finalBgEffSize.height)) — \(String(format: "%.1f", bgDuration))s @ \(bgBitrate)bps\n", stderr)
+        fputs("Screen:          \(Int(finalScrEffSize.width))x\(Int(finalScrEffSize.height)) — \(String(format: "%.1f", scrDuration))s\n", stderr)
         fputs("Active duration: \(String(format: "%.2f", activeDuration))s\n", stderr)
         fputs("Output:          \(dims.outW)x\(dims.outH) → \(outputPath)\n", stderr)
         fputs("Overlay:         \(dims.ovlW)x\(dims.ovlH) at (\(dims.ovlX), \(dims.ovlY))\n", stderr)
@@ -169,7 +191,9 @@ struct CompositeBezelGPU: ParsableCommand {
             bgBitrate:            bgBitrate,
             bgPreferredTransform: bgTransform,
             scrPreferredTransform: scrTransform,
-            totalFrames:          totalFrames
+            totalFrames:          totalFrames,
+            bgRotationOverride:   bgRotation,
+            scrRotationOverride:  scrRotation
         )
         compositor.start(sema: sema)
         sema.wait()

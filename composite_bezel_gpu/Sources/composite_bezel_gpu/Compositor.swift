@@ -31,6 +31,8 @@ final class Compositor: @unchecked Sendable {
     private let bgPreferredTransform: CGAffineTransform
     private let scrPreferredTransform: CGAffineTransform
     private let totalFrames: Int    // for progress reporting
+    private let bgRotationOverride: Int?
+    private let scrRotationOverride: Int?
 
     init(
         bgURL: URL,
@@ -44,7 +46,9 @@ final class Compositor: @unchecked Sendable {
         bgBitrate: Int,
         bgPreferredTransform: CGAffineTransform,
         scrPreferredTransform: CGAffineTransform,
-        totalFrames: Int
+        totalFrames: Int,
+        bgRotationOverride: Int? = nil,
+        scrRotationOverride: Int? = nil
     ) {
         self.bgURL                = bgURL
         self.scrURL               = scrURL
@@ -59,6 +63,8 @@ final class Compositor: @unchecked Sendable {
         self.bgPreferredTransform = bgPreferredTransform
         self.scrPreferredTransform = scrPreferredTransform
         self.totalFrames          = totalFrames
+        self.bgRotationOverride   = bgRotationOverride
+        self.scrRotationOverride  = scrRotationOverride
     }
 
     // ── Public entry point ─────────────────────────────────────────────────────
@@ -248,8 +254,16 @@ final class Compositor: @unchecked Sendable {
                 var bgCI  = CIImage(cvPixelBuffer: bgBuf)
                 var scrCI = CIImage(cvPixelBuffer: scrBuf)
 
-                bgCI  = self.applyRotation(bgCI,  transform: self.bgPreferredTransform)
-                scrCI = self.applyRotation(scrCI, transform: self.scrPreferredTransform)
+                if let deg = self.bgRotationOverride {
+                    bgCI = self.applyExplicitRotation(bgCI, degrees: deg)
+                } else {
+                    bgCI = self.applyRotation(bgCI, transform: self.bgPreferredTransform)
+                }
+                if let deg = self.scrRotationOverride {
+                    scrCI = self.applyExplicitRotation(scrCI, degrees: deg)
+                } else {
+                    scrCI = self.applyRotation(scrCI, transform: self.scrPreferredTransform)
+                }
 
                 let d = self.dims
 
@@ -263,13 +277,24 @@ final class Compositor: @unchecked Sendable {
                     ])
                 }
 
-                // Scale screen content to fit bezel screen area
-                let scrScaleX = Double(d.screenW) / scrCI.extent.width
-                let scrScaleY = Double(d.screenH) / scrCI.extent.height
+                // Scale screen content to fit bezel screen area — preserve aspect ratio (no stretch).
+                // Matches CPU path: scale=force_original_aspect_ratio=decrease + centered pad.
+                let preScrW = scrCI.extent.width
+                let preScrH = scrCI.extent.height
+                let scrScaleX = Double(d.screenW) / Double(preScrW)
+                let scrScaleY = Double(d.screenH) / Double(preScrH)
+                let scrScale = min(scrScaleX, scrScaleY)
+                // Compute expected output dimensions before applying filter (avoids relying on
+                // post-filter extent which may not update in CIImage's lazy evaluation model)
+                let scaledScrW = CGFloat(Double(preScrW) * scrScale)
+                let scaledScrH = CGFloat(Double(preScrH) * scrScale)
                 scrCI = scrCI.applyingFilter("CIBicubicScaleTransform", parameters: [
-                    "inputScale":        min(scrScaleX, scrScaleY),
-                    "inputAspectRatio":  scrScaleX / scrScaleY,
+                    "inputScale": scrScale,
                 ])
+
+                // Center the fit content within the bezel canvas (CIImage Y-up)
+                let centeredXOff   = (CGFloat(DimensionCalc.bezelW) - scaledScrW) / 2
+                let centeredYOffCI = (CGFloat(DimensionCalc.bezelH) - scaledScrH) / 2
 
                 // Place screen onto transparent bezel-sized canvas
                 let canvas = CIImage(color: .clear).cropped(
@@ -277,8 +302,8 @@ final class Compositor: @unchecked Sendable {
                 )
                 let scrOnCanvas = scrCI
                     .transformed(by: CGAffineTransform(
-                        translationX: CGFloat(d.xOff),
-                        y:            CGFloat(d.yOffCI)
+                        translationX: centeredXOff,
+                        y:            centeredYOffCI
                     ))
                     .composited(over: canvas)
 
@@ -343,11 +368,46 @@ final class Compositor: @unchecked Sendable {
         }
     }
 
-    // ── Rotation helper ────────────────────────────────────────────────────────
-    // AVAssetTrack.preferredTransform rotates content correctly but shifts CIImage.extent.origin
-    // off-zero. Without this, rotated content is clipped outside the render bounds.
+    // ── Rotation helpers ───────────────────────────────────────────────────────
+
+    // Applies AVAssetTrack.preferredTransform (designed for UIKit Y-down coords) to a
+    // CIImage (Y-up coords). For 90°/270° rotations the Y-axis difference causes a 180°
+    // error in the result; this is corrected by the additional flip below.
+    // For 0°/180° rotations no correction is needed (symmetric under Y-flip).
     private func applyRotation(_ image: CIImage, transform: CGAffineTransform) -> CIImage {
         let rotated = image.transformed(by: transform)
+        let normalized = rotated.transformed(by: CGAffineTransform(
+            translationX: -rotated.extent.origin.x,
+            y:            -rotated.extent.origin.y
+        ))
+
+        // atan2(b, a) gives the rotation angle embedded in the UIKit transform.
+        // For 90°/270° rotations, apply a compensating 180° flip.
+        let angle = atan2(transform.b, transform.a)
+        let absAngleDeg = abs(angle * 180.0 / .pi)
+        let needsFlip = (absAngleDeg > 44 && absAngleDeg < 136) ||
+                        (absAngleDeg > 224 && absAngleDeg < 316)
+
+        guard needsFlip else { return normalized }
+
+        let w = normalized.extent.width
+        let h = normalized.extent.height
+        // 180° rotation: (a:-1, d:-1, tx:w, ty:h) keeps origin at (0,0)
+        return normalized.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: w, ty: h))
+    }
+
+    // Applies an explicit CW rotation in CIImage (Y-up) coordinate space.
+    // Used when the caller specifies --bg-rotation or --scr-rotation to override
+    // auto-detection. Since this operates directly in CIImage coords, no Y-axis
+    // compensation is needed.
+    private func applyExplicitRotation(_ image: CIImage, degrees: Int) -> CIImage {
+        let norm = ((degrees % 360) + 360) % 360
+        guard norm != 0 else { return image }
+        // Negative radians = CW in CIImage (Y-up, where positive angle = CCW)
+        let radians = -Double(norm) * .pi / 180.0
+        let cosA = CGFloat(cos(radians))
+        let sinA = CGFloat(sin(radians))
+        let rotated = image.transformed(by: CGAffineTransform(a: cosA, b: sinA, c: -sinA, d: cosA, tx: 0, ty: 0))
         return rotated.transformed(by: CGAffineTransform(
             translationX: -rotated.extent.origin.x,
             y:            -rotated.extent.origin.y
