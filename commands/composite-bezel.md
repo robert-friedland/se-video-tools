@@ -37,7 +37,7 @@ Optional flags:
 - `--scr-rotation 0|90|180|270` — override the screen recording rotation in degrees CW (auto-detected from track metadata if omitted)
 
 **Performance:**
-- `--jobs N` — number of parallel render chunks (default: half of logical CPUs). Set higher (e.g., `--jobs 10`) for maximum speed, or lower (e.g., `--jobs 2`) to keep the machine responsive while rendering.
+- `--jobs N` — accepted for compatibility but ignored (GPU uses a single-pass pipeline).
 
 ## Key facts
 
@@ -45,7 +45,7 @@ Optional flags:
 - The background should be landscape footage. A warning is shown if it is not.
 - The bezeled iPad floats transparently over the background — no solid color box around it.
 - Rotation is auto-detected from track metadata for both inputs. Use `--bg-rotation` / `--scr-rotation` only if the output looks rotated or upside-down.
-- On Apple Silicon Macs, compositing runs on the GPU via Metal (~2× real-time for 4K). On Intel, falls back to CPU via ffmpeg.
+- Requires Apple Silicon. Compositing runs on the GPU via Metal (~2× real-time for 4K).
 - Output is HEVC MP4 tagged for QuickTime and DaVinci Resolve compatibility.
 - To update the tool: `composite_bezel update`
 

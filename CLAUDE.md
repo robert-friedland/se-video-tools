@@ -4,7 +4,7 @@ CLI tools for compositing iPad screen recordings over real-life background video
 
 ## Tools
 
-- **`composite_bezel.sh`** — shell wrapper; GPU fast-path via `composite_bezel_gpu` binary, CPU fallback via ffmpeg
+- **`composite_bezel.sh`** — shell wrapper for GPU compositing via `composite_bezel_gpu` binary (Apple Silicon only)
 - **`composite_bezel_gpu/`** — Swift CLI (AVFoundation + Core Image/Metal); video-only output, shell does audio mux
 - **`ipad_bezel.sh`** — add iPad bezel overlay to a standalone screen recording
 - **`sync_clap.sh`** — detect clap sync offset between background and screen recording

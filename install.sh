@@ -58,7 +58,7 @@ curl -fL "$BINARY_URL" -o "$INSTALL_DIR/composite_bezel_gpu" && {
     xattr -d com.apple.quarantine "$INSTALL_DIR/composite_bezel_gpu" 2>/dev/null || true
     ln -sf "$INSTALL_DIR/composite_bezel_gpu" "$BREW_BIN/composite_bezel_gpu"
     echo "✓ composite_bezel_gpu installed → $BREW_BIN/composite_bezel_gpu"
-} || echo "  composite_bezel_gpu not available (Intel Mac or GitHub Release not yet published — CPU fallback active)"
+} || echo "  composite_bezel_gpu not available (Apple Silicon required or GitHub Release not yet published)"
 
 # Download sync_clap script
 echo "Downloading sync_clap..."

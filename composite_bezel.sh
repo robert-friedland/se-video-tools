@@ -47,7 +47,7 @@ if [ "$1" = "update" ]; then
         codesign -s - "$SCRIPT_DIR/composite_bezel_gpu"
         xattr -d com.apple.quarantine "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null || true
         echo "composite_bezel_gpu updated."
-    } || echo "composite_bezel_gpu not available."
+    } || echo "Warning: composite_bezel_gpu binary not available (Apple Silicon required)."
     echo "Done."
     exit 0
 fi

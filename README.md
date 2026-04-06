@@ -4,7 +4,7 @@ Shell tools for compositing iPad screen recordings with a realistic bezel overla
 
 ## Prerequisites
 
-- macOS (Apple Silicon or Intel)
+- macOS Apple Silicon (M1 or later)
 - [Homebrew](https://brew.sh) — installed automatically if missing
 - ffmpeg — installed automatically via Homebrew
 
@@ -25,7 +25,7 @@ This installs three commands — `ipad_bezel`, `composite_bezel`, and `sync_clap
 Overlays an iPad mini Starlight bezel on a screen recording. Produces a single MP4 ready for editing.
 
 ```bash
-ipad_bezel [--bg black|greenscreen|0xRRGGBB] [--jobs N] input.mp4 [output.mp4]
+ipad_bezel [--bg black|greenscreen|0xRRGGBB] [--duration N] input.mp4 [output.mp4]
 ```
 
 **Options**
@@ -33,14 +33,14 @@ ipad_bezel [--bg black|greenscreen|0xRRGGBB] [--jobs N] input.mp4 [output.mp4]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--bg` | `black` | Background color behind the bezel. Use `greenscreen` for chroma-key green. |
-| `--jobs N` | all CPUs | Number of parallel render chunks. |
+| `--duration N` | full clip | Render N seconds of output. |
 
 **Examples**
 
 ```bash
 ipad_bezel recording.mp4
 ipad_bezel --bg greenscreen recording.mp4 recording_keyed.mp4
-ipad_bezel --jobs 4 recording.mp4
+ipad_bezel --duration 30 recording.mp4
 ```
 
 ---
@@ -64,7 +64,6 @@ composite_bezel [OPTIONS] background.mp4 screen_recording.mp4 [output.mp4]
 | `--scr-start N` | `0` | Start time in seconds for screen recording. |
 | `--duration N` | min of clips | Render this many seconds of output. |
 | `--audio both\|bg\|screen\|none` | `both` | Which audio to include. |
-| `--jobs N` | all CPUs | Number of parallel render chunks. |
 | `--output-width N` | native | Scale output to this width (e.g. `1920` for 1080p). |
 
 **Examples**
