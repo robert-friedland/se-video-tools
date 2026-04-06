@@ -4,14 +4,18 @@ Add an iPad mini Starlight bezel overlay to a screen recording, producing an MP4
 
 1. If the user hasn't specified a file, ask which screen recording they want to bezel.
 2. If they haven't specified an output path, the default (`<input>_bezeled.mp4` in the same directory) is fine — no need to ask.
-3. Run the command via Bash and wait for it to finish.
-4. Report the output path, file size, and duration.
+3. If they haven't specified `--bg`, default to `black` — no need to ask unless the context suggests they plan to composite the result (in which case suggest `greenscreen`).
+4. Run the command via Bash and wait for it to finish.
+5. Report the output path, file size, and duration.
 
 ## Command
 
 ```bash
-ipad_bezel "<input_file>" ["<output_file>"]
+ipad_bezel [--bg black|greenscreen|0xRRGGBB] "<input_file>" ["<output_file>"]
 ```
+
+Optional flags:
+- `--bg black|greenscreen|0xRRGGBB` — background color for the area outside the bezel (default `black`). Use `greenscreen` to get chroma-key green (`0x00B140`) for compositing in DaVinci Resolve. Pass a hex color like `0xFF0000` for any custom color.
 
 ## Key facts
 
