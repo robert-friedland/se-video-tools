@@ -32,6 +32,10 @@ Optional flags:
 **Audio:**
 - `--audio both|bg|screen|none` — which audio to include in the output (default `both`). `both` mixes background + screen audio at equal levels; `bg` and `screen` use a single source; `none` strips audio entirely.
 
+**Rotation overrides (use when auto-detection fails):**
+- `--bg-rotation 0|90|180|270` — override the background rotation in degrees CW (auto-detected from track metadata if omitted)
+- `--scr-rotation 0|90|180|270` — override the screen recording rotation in degrees CW (auto-detected from track metadata if omitted)
+
 **Performance:**
 - `--jobs N` — number of parallel render chunks (default: half of logical CPUs). Set higher (e.g., `--jobs 10`) for maximum speed, or lower (e.g., `--jobs 2`) to keep the machine responsive while rendering.
 
@@ -40,8 +44,8 @@ Optional flags:
 - The screen recording must be a portrait iPad mini recording. Aspect ratio is validated automatically.
 - The background should be landscape footage. A warning is shown if it is not.
 - The bezeled iPad floats transparently over the background — no solid color box around it.
-- Rotation metadata on either input is handled automatically.
-- Processing runs in parallel across all CPU cores.
+- Rotation is auto-detected from track metadata for both inputs. Use `--bg-rotation` / `--scr-rotation` only if the output looks rotated or upside-down.
+- On Apple Silicon Macs, compositing runs on the GPU via Metal (~2× real-time for 4K). On Intel, falls back to CPU via ffmpeg.
 - Output is HEVC MP4 tagged for QuickTime and DaVinci Resolve compatibility.
 - To update the tool: `composite_bezel update`
 

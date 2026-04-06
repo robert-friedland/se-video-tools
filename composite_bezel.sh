@@ -40,6 +40,14 @@ if [ "$1" = "update" ]; then
             -o "$HOME/.claude/commands/composite-bezel.md"
         echo "Claude skill updated."
     fi
+    # Update GPU binary (Intel Macs will gracefully skip if download fails)
+    BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
+    curl -fL "$BINARY_URL" -o "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null && {
+        chmod +x "$SCRIPT_DIR/composite_bezel_gpu"
+        codesign -s - "$SCRIPT_DIR/composite_bezel_gpu"
+        xattr -d com.apple.quarantine "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null || true
+        echo "composite_bezel_gpu updated."
+    } || echo "composite_bezel_gpu not available for this platform (Intel fallback active)."
     echo "Done."
     exit 0
 fi
@@ -55,6 +63,8 @@ DURATION_OVERRIDE=""
 AUDIO_MODE="both"  # both | bg | screen | none
 JOBS_OVERRIDE=""
 OUTPUT_WIDTH=""
+BG_ROTATION_OVERRIDE=""
+SCR_ROTATION_OVERRIDE=""
 
 # Parse args — flags may appear anywhere (before or after positionals)
 POSITIONALS=()
@@ -70,6 +80,8 @@ while [ $# -gt 0 ]; do
         --audio)         AUDIO_MODE="$2";    shift 2 ;;
         --jobs)          JOBS_OVERRIDE="$2";    shift 2 ;;
         --output-width)  OUTPUT_WIDTH="$2";    shift 2 ;;
+        --bg-rotation)   BG_ROTATION_OVERRIDE="$2";  shift 2 ;;
+        --scr-rotation)  SCR_ROTATION_OVERRIDE="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1"
             echo "Usage: $0 [--overlay-scale 0.7] [--x N] [--y N] [--margin 40] [--bg-start N] [--scr-start N] [--duration N] background.mp4 screen.mp4 [output.mp4]"
@@ -153,10 +165,8 @@ fi
 # Warn if background is not landscape
 BG_IS_LANDSCAPE=$(python3 -c "print('true' if $BG_EFF_W > $BG_EFF_H else 'false')")
 if [ "$BG_IS_LANDSCAPE" = "false" ]; then
-    echo "Warning: background effective dimensions ${BG_EFF_W}x${BG_EFF_H} are portrait, not landscape."
-    echo "  The bezel overlay may have negative coordinates and appear partially clipped off-screen."
-    read -p "Continue anyway? [y/N] " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || exit 1
+    echo "Warning: background effective dimensions ${BG_EFF_W}x${BG_EFF_H} are portrait, not landscape." >&2
+    echo "  The bezel overlay may have negative coordinates and appear partially clipped off-screen. (continuing)" >&2
 fi
 
 # ── Probe screen recording ────────────────────────────────────────────────────
@@ -201,9 +211,7 @@ print('true' if diff <= $RATIO_TOLERANCE else 'false')
 ")
 
 if [ "$VALID_RATIO" = "false" ]; then
-    echo "Warning: screen recording effective dimensions ${SCR_EFF_W}x${SCR_EFF_H} (ratio $(python3 -c "print(round($SCR_EFF_W/$SCR_EFF_H,3))")) don't match iPad mini portrait (expected ~${IPAD_RATIO} ±${RATIO_TOLERANCE})"
-    read -p "Continue anyway? [y/N] " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || exit 1
+    echo "Warning: screen recording effective dimensions ${SCR_EFF_W}x${SCR_EFF_H} (ratio $(python3 -c "print(round($SCR_EFF_W/$SCR_EFF_H,3))")) don't match iPad mini portrait (expected ~${IPAD_RATIO} ±${RATIO_TOLERANCE}) (continuing)" >&2
 fi
 
 # ── Calculate dimensions ──────────────────────────────────────────────────────
@@ -294,6 +302,70 @@ echo "Output size:     ${OUT_W}x${OUT_H}$([ -n "$OUTPUT_WIDTH" ] && echo " (--ou
 echo "Parallel jobs:   ${N_JOBS} (of ${LOGICAL_CPUS} logical CPUs; use --jobs N to override)"
 echo "Output:          $OUTPUT"
 echo ""
+
+# ── GPU fast-path (Apple Silicon; falls back to CPU chunk pipeline if not found) ──
+if command -v composite_bezel_gpu &>/dev/null; then
+    # macOS mktemp requires X's at end; .mp4 extension added after randomization
+    _TMP=$(mktemp /tmp/composite_gpu_XXXXXX)
+    TEMP_VIDEO="${_TMP}.mp4"
+    mv "$_TMP" "$TEMP_VIDEO"
+    trap 'rm -f "$TEMP_VIDEO"' EXIT
+
+    # Compute audio atrim endpoints (both start AND end required to prevent audio > video)
+    BG_END_TIME=$(python3 -c "print(float('$BG_START') + float('$ACTIVE_DURATION'))")
+    SCR_END_TIME=$(python3 -c "print(float('$SCR_START') + float('$ACTIVE_DURATION'))")
+
+    # Reconstruct args from parsed variables (avoids third-positional OUTPUT conflicts)
+    GPU_ARGS=("$BG" "$SCR" --bezel "$BEZEL" --output "$TEMP_VIDEO")
+    GPU_ARGS+=(--bg-start "$BG_START" --scr-start "$SCR_START")
+    GPU_ARGS+=(--overlay-scale "$OVERLAY_SCALE" --margin "$MARGIN")
+    [ -n "$OVL_X_OVERRIDE" ] && GPU_ARGS+=(--x "$OVL_X_OVERRIDE")
+    [ -n "$OVL_Y_OVERRIDE" ] && GPU_ARGS+=(--y "$OVL_Y_OVERRIDE")
+    [ -n "$DURATION_OVERRIDE" ] && GPU_ARGS+=(--duration "$DURATION_OVERRIDE")
+    [ -n "$OUTPUT_WIDTH" ] && GPU_ARGS+=(--output-width "$OUTPUT_WIDTH")
+    [ -n "$BG_ROTATION_OVERRIDE" ]  && GPU_ARGS+=(--bg-rotation  "$BG_ROTATION_OVERRIDE")
+    [ -n "$SCR_ROTATION_OVERRIDE" ] && GPU_ARGS+=(--scr-rotation "$SCR_ROTATION_OVERRIDE")
+    GPU_ARGS+=(--audio "$AUDIO_MODE")
+
+    echo "GPU path: composite_bezel_gpu"
+    composite_bezel_gpu "${GPU_ARGS[@]}"
+    if [ $? -ne 0 ]; then echo "Error: GPU compositing failed" >&2; exit 1; fi
+
+    # Second pass: audio mux from original source files
+    # Uses both start AND end times in atrim to avoid audio duration > video duration
+    case "$AUDIO_MODE" in
+        both)
+            if [ "$BG_HAS_AUDIO" = "audio" ] && [ "$SCR_HAS_AUDIO" = "audio" ]; then
+                AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[abg];\
+[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[ascr];\
+[abg][ascr]amix=inputs=2:duration=shortest:normalize=0[aout]"
+                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 192k)
+            elif [ "$BG_HAS_AUDIO" = "audio" ]; then
+                AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[aout]"
+                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
+            elif [ "$SCR_HAS_AUDIO" = "audio" ]; then
+                AUDIO_FILTER="[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[aout]"
+                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
+            else
+                AUDIO_MUXARGS=(-an)
+            fi ;;
+        bg)
+            AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[aout]"
+            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
+        screen)
+            AUDIO_FILTER="[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[aout]"
+            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
+        none)  AUDIO_MUXARGS=(-an) ;;
+        *)
+            echo "Error: --audio must be one of: both, bg, screen, none" >&2; exit 1 ;;
+    esac
+
+    ffmpeg -i "$TEMP_VIDEO" -i "$BG" -i "$SCR" \
+        -map 0:v "${AUDIO_MUXARGS[@]}" \
+        -c:v copy -tag:v hvc1 \
+        -y "$OUTPUT" 2>&1
+    exit $?
+fi
 
 # ── Parallel chunk processing ─────────────────────────────────────────────────
 
