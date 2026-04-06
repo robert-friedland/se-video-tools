@@ -86,6 +86,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-clap.md" \
         -o "$SKILL_DIR/sync-clap.md"
     echo "✓ Claude /sync-clap skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-visual.md" \
+        -o "$SKILL_DIR/sync-visual.md"
+    echo "✓ Claude /sync-visual skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -99,4 +102,4 @@ echo "  ipad_bezel <input.mp4>                          # add bezel overlay"
 echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over background"
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /se-video-tools  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /se-video-tools  (Claude Code)"

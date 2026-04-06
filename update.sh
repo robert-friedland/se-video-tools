@@ -29,6 +29,8 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
         mkdir -p "$HOME/.claude/commands"
         curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
             -o "$HOME/.claude/commands/se-video-tools.md" || true
+        curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-visual.md" \
+            -o "$HOME/.claude/commands/sync-visual.md" || true
         echo "Claude skill updated."
     fi
     # Re-exec new version to pick up any changes; _SE_UPDATED prevents infinite loop
