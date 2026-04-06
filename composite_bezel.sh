@@ -16,14 +16,13 @@
 #   --duration N          render N seconds of output (default: min of remaining clip lengths)
 #   --test-seconds N      alias for --duration
 #   --audio both|bg|screen|none  which audio to include (default: both)
-#   --jobs N              parallel render chunks (default: all logical CPUs)
 #   --output-width N      scale output to this width, e.g. 1920 for 1080p (default: native)
 
 set -e
 
 # Resolve real script location through symlinks (BASH_SOURCE[0] may be a symlink in homebrew/bin)
 SCRIPT_DIR="$(cd "$(dirname "$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")")" && pwd)"
-BEZEL="$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
+BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
 
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/robert-friedland/se-video-tools/main"
 
@@ -33,23 +32,35 @@ if [ "$1" = "update" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/composite_bezel.sh" -o "$SCRIPT_DIR/composite_bezel.sh.tmp" \
         && mv "$SCRIPT_DIR/composite_bezel.sh.tmp" "$SCRIPT_DIR/composite_bezel.sh" \
         && chmod +x "$SCRIPT_DIR/composite_bezel.sh"
-    curl -fsSL "${GITHUB_RAW_BASE}/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
-        -o "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
+    mkdir -p "$SCRIPT_DIR/assets"
+    curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
+        -o "$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
+    rm -f "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
     if [ -d "$HOME/.claude/commands" ]; then
         curl -fsSL "${GITHUB_RAW_BASE}/commands/composite-bezel.md" \
             -o "$HOME/.claude/commands/composite-bezel.md"
         echo "Claude skill updated."
     fi
-    # Update GPU binary (Intel Macs will gracefully skip if download fails)
     BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
     curl -fL "$BINARY_URL" -o "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null && {
         chmod +x "$SCRIPT_DIR/composite_bezel_gpu"
         codesign -s - "$SCRIPT_DIR/composite_bezel_gpu"
         xattr -d com.apple.quarantine "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null || true
         echo "composite_bezel_gpu updated."
-    } || echo "composite_bezel_gpu not available for this platform (Intel fallback active)."
+    } || echo "Warning: composite_bezel_gpu binary not available (Apple Silicon required)."
     echo "Done."
     exit 0
+fi
+
+# Locate GPU binary — prefer co-located binary in install dir, fall back to PATH
+if [ -f "$SCRIPT_DIR/composite_bezel_gpu" ] && [ -x "$SCRIPT_DIR/composite_bezel_gpu" ]; then
+    GPU_BIN="$SCRIPT_DIR/composite_bezel_gpu"
+elif command -v composite_bezel_gpu &>/dev/null; then
+    GPU_BIN="$(command -v composite_bezel_gpu)"
+else
+    echo "Error: composite_bezel_gpu not found. composite_bezel requires Apple Silicon." >&2
+    echo "Run 'composite_bezel update' to install the GPU binary." >&2
+    exit 1
 fi
 
 # Defaults
@@ -61,7 +72,6 @@ BG_START=0
 SCR_START=0
 DURATION_OVERRIDE=""
 AUDIO_MODE="both"  # both | bg | screen | none
-JOBS_OVERRIDE=""
 OUTPUT_WIDTH=""
 BG_ROTATION_OVERRIDE=""
 SCR_ROTATION_OVERRIDE=""
@@ -78,7 +88,7 @@ while [ $# -gt 0 ]; do
         --scr-start)     SCR_START="$2";     shift 2 ;;
         --duration|--test-seconds) DURATION_OVERRIDE="$2"; shift 2 ;;
         --audio)         AUDIO_MODE="$2";    shift 2 ;;
-        --jobs)          JOBS_OVERRIDE="$2";    shift 2 ;;
+        --jobs)          shift 2 ;;  # accepted for compatibility; GPU uses single-pass pipeline
         --output-width)  OUTPUT_WIDTH="$2";    shift 2 ;;
         --bg-rotation)   BG_ROTATION_OVERRIDE="$2";  shift 2 ;;
         --scr-rotation)  SCR_ROTATION_OVERRIDE="$2"; shift 2 ;;
@@ -265,25 +275,6 @@ if [ -n "$DURATION_OVERRIDE" ]; then
     ACTIVE_DURATION="$DURATION_OVERRIDE"
 fi
 
-# ── Jobs (computed here so summary echo below shows correct values) ────────────
-LOGICAL_CPUS=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
-if [ -n "$JOBS_OVERRIDE" ]; then
-    N_JOBS="$JOBS_OVERRIDE"
-else
-    N_JOBS=$LOGICAL_CPUS
-fi
-N_JOBS=$(python3 -c "print(max(1, min($N_JOBS, int(float('$ACTIVE_DURATION')))))")
-CHUNK_DUR=$(python3 -c "print(float('$ACTIVE_DURATION') / $N_JOBS)")
-
-# ── FPS + total frame count (for progress bar) ────────────────────────────────
-BG_FPS_RAW=$(ffprobe -v error -select_streams v:0 \
-    -show_entries stream=r_frame_rate -of csv=p=0 "$BG" 2>/dev/null)
-TOTAL_FRAMES=$(python3 -c "
-from fractions import Fraction
-fps = float(Fraction('$BG_FPS_RAW'.rstrip(',')))
-print(max(1, int(fps * float('$ACTIVE_DURATION') + 0.5)))
-")
-
 # ── Audio detection ───────────────────────────────────────────────────────────
 BG_HAS_AUDIO=$(ffprobe -v error -select_streams a:0 \
     -show_entries stream=codec_type -of csv=p=0 "$BG" 2>/dev/null)
@@ -299,257 +290,66 @@ echo "Bezel canvas:    ${BEZEL_W}x${BEZEL_H} → screen area ${SCREEN_W}x${SCREE
 echo "Overlay size:    ${OVL_W}x${OVL_H} at position ${OVL_X},${OVL_Y} (scale=${OVERLAY_SCALE})"
 echo "Output bitrate:  ${OUTPUT_BITRATE}bps"
 echo "Output size:     ${OUT_W}x${OUT_H}$([ -n "$OUTPUT_WIDTH" ] && echo " (--output-width; native ${BG_EFF_W}x${BG_EFF_H})" || echo " (native)")"
-echo "Parallel jobs:   ${N_JOBS} (of ${LOGICAL_CPUS} logical CPUs; use --jobs N to override)"
 echo "Output:          $OUTPUT"
 echo ""
 
-# ── GPU fast-path (Apple Silicon; falls back to CPU chunk pipeline if not found) ──
-if command -v composite_bezel_gpu &>/dev/null; then
-    # macOS mktemp requires X's at end; .mp4 extension added after randomization
-    _TMP=$(mktemp /tmp/composite_gpu_XXXXXX)
-    TEMP_VIDEO="${_TMP}.mp4"
-    mv "$_TMP" "$TEMP_VIDEO"
-    trap 'rm -f "$TEMP_VIDEO"' EXIT
+# ── GPU compositing ────────────────────────────────────────────────────────────
+# macOS mktemp requires X's at end; .mp4 extension added after randomization
+_TMP=$(mktemp /tmp/composite_gpu_XXXXXX)
+TEMP_VIDEO="${_TMP}.mp4"
+mv "$_TMP" "$TEMP_VIDEO"
+trap 'rm -f "$TEMP_VIDEO"' EXIT
 
-    # Compute audio atrim endpoints (both start AND end required to prevent audio > video)
-    BG_END_TIME=$(python3 -c "print(float('$BG_START') + float('$ACTIVE_DURATION'))")
-    SCR_END_TIME=$(python3 -c "print(float('$SCR_START') + float('$ACTIVE_DURATION'))")
+# Compute audio atrim endpoints (both start AND end required to prevent audio > video)
+BG_END_TIME=$(python3 -c "print(float('$BG_START') + float('$ACTIVE_DURATION'))")
+SCR_END_TIME=$(python3 -c "print(float('$SCR_START') + float('$ACTIVE_DURATION'))")
 
-    # Reconstruct args from parsed variables (avoids third-positional OUTPUT conflicts)
-    GPU_ARGS=("$BG" "$SCR" --bezel "$BEZEL" --output "$TEMP_VIDEO")
-    GPU_ARGS+=(--bg-start "$BG_START" --scr-start "$SCR_START")
-    GPU_ARGS+=(--overlay-scale "$OVERLAY_SCALE" --margin "$MARGIN")
-    [ -n "$OVL_X_OVERRIDE" ] && GPU_ARGS+=(--x "$OVL_X_OVERRIDE")
-    [ -n "$OVL_Y_OVERRIDE" ] && GPU_ARGS+=(--y "$OVL_Y_OVERRIDE")
-    [ -n "$DURATION_OVERRIDE" ] && GPU_ARGS+=(--duration "$DURATION_OVERRIDE")
-    [ -n "$OUTPUT_WIDTH" ] && GPU_ARGS+=(--output-width "$OUTPUT_WIDTH")
-    [ -n "$BG_ROTATION_OVERRIDE" ]  && GPU_ARGS+=(--bg-rotation  "$BG_ROTATION_OVERRIDE")
-    [ -n "$SCR_ROTATION_OVERRIDE" ] && GPU_ARGS+=(--scr-rotation "$SCR_ROTATION_OVERRIDE")
-    GPU_ARGS+=(--audio "$AUDIO_MODE")
+# Reconstruct args from parsed variables (avoids third-positional OUTPUT conflicts)
+GPU_ARGS=("$BG" "$SCR" --bezel "$BEZEL" --output "$TEMP_VIDEO")
+GPU_ARGS+=(--bg-start "$BG_START" --scr-start "$SCR_START")
+GPU_ARGS+=(--overlay-scale "$OVERLAY_SCALE" --margin "$MARGIN")
+[ -n "$OVL_X_OVERRIDE" ] && GPU_ARGS+=(--x "$OVL_X_OVERRIDE")
+[ -n "$OVL_Y_OVERRIDE" ] && GPU_ARGS+=(--y "$OVL_Y_OVERRIDE")
+[ -n "$DURATION_OVERRIDE" ] && GPU_ARGS+=(--duration "$DURATION_OVERRIDE")
+[ -n "$OUTPUT_WIDTH" ] && GPU_ARGS+=(--output-width "$OUTPUT_WIDTH")
+[ -n "$BG_ROTATION_OVERRIDE" ]  && GPU_ARGS+=(--bg-rotation  "$BG_ROTATION_OVERRIDE")
+[ -n "$SCR_ROTATION_OVERRIDE" ] && GPU_ARGS+=(--scr-rotation "$SCR_ROTATION_OVERRIDE")
+GPU_ARGS+=(--audio "$AUDIO_MODE")
 
-    echo "GPU path: composite_bezel_gpu"
-    composite_bezel_gpu "${GPU_ARGS[@]}"
-    if [ $? -ne 0 ]; then echo "Error: GPU compositing failed" >&2; exit 1; fi
+echo "GPU path: $GPU_BIN"
+"$GPU_BIN" "${GPU_ARGS[@]}"
+if [ $? -ne 0 ]; then echo "Error: GPU compositing failed" >&2; exit 1; fi
 
-    # Second pass: audio mux from original source files
-    # Uses both start AND end times in atrim to avoid audio duration > video duration
-    case "$AUDIO_MODE" in
-        both)
-            if [ "$BG_HAS_AUDIO" = "audio" ] && [ "$SCR_HAS_AUDIO" = "audio" ]; then
-                AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[abg];\
+# Second pass: audio mux from original source files
+# Uses both start AND end times in atrim to avoid audio duration > video duration
+case "$AUDIO_MODE" in
+    both)
+        if [ "$BG_HAS_AUDIO" = "audio" ] && [ "$SCR_HAS_AUDIO" = "audio" ]; then
+            AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[abg];\
 [2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[ascr];\
 [abg][ascr]amix=inputs=2:duration=shortest:normalize=0[aout]"
-                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 192k)
-            elif [ "$BG_HAS_AUDIO" = "audio" ]; then
-                AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
-            elif [ "$SCR_HAS_AUDIO" = "audio" ]; then
-                AUDIO_FILTER="[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
-            else
-                AUDIO_MUXARGS=(-an)
-            fi ;;
-        bg)
+            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 192k)
+        elif [ "$BG_HAS_AUDIO" = "audio" ]; then
             AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[aout]"
-            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
-        screen)
+            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
+        elif [ "$SCR_HAS_AUDIO" = "audio" ]; then
             AUDIO_FILTER="[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[aout]"
-            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
-        none)  AUDIO_MUXARGS=(-an) ;;
-        *)
-            echo "Error: --audio must be one of: both, bg, screen, none" >&2; exit 1 ;;
-    esac
+            AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k)
+        else
+            AUDIO_MUXARGS=(-an)
+        fi ;;
+    bg)
+        AUDIO_FILTER="[1:a]atrim=${BG_START}:${BG_END_TIME},asetpts=PTS-STARTPTS[aout]"
+        AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
+    screen)
+        AUDIO_FILTER="[2:a]atrim=${SCR_START}:${SCR_END_TIME},asetpts=PTS-STARTPTS[aout]"
+        AUDIO_MUXARGS=(-filter_complex "$AUDIO_FILTER" -map "[aout]" -c:a aac -b:a 128k) ;;
+    none)  AUDIO_MUXARGS=(-an) ;;
+    *)
+        echo "Error: --audio must be one of: both, bg, screen, none" >&2; exit 1 ;;
+esac
 
-    ffmpeg -i "$TEMP_VIDEO" -i "$BG" -i "$SCR" \
-        -map 0:v "${AUDIO_MUXARGS[@]}" \
-        -c:v copy -tag:v hvc1 \
-        -y "$OUTPUT" 2>&1
-    exit $?
-fi
-
-# ── Parallel chunk processing ─────────────────────────────────────────────────
-
-WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
-
-echo "Processing ${N_JOBS} chunks in parallel..."
-
-PIDS=()
-for i in $(seq 0 $((N_JOBS - 1))); do
-    # Each clip is trimmed independently using its own start offset
-    CHUNK_OFFSET=$(python3 -c "print($i * $CHUNK_DUR)")
-    CHUNK_LEN=$(python3 -c "print(min(($i + 1) * $CHUNK_DUR, float('$ACTIVE_DURATION')) - $i * $CHUNK_DUR)")
-
-    BG_START_I=$(python3 -c "print(float('$BG_START') + $CHUNK_OFFSET)")
-    BG_END_I=$(python3 -c "print(float('$BG_START') + $CHUNK_OFFSET + $CHUNK_LEN)")
-    SCR_START_I=$(python3 -c "print(float('$SCR_START') + $CHUNK_OFFSET)")
-    SCR_END_I=$(python3 -c "print(float('$SCR_START') + $CHUNK_OFFSET + $CHUNK_LEN)")
-
-    CHUNK_OUT="$WORK_DIR/chunk_$(printf '%04d' $i).mp4"
-
-    # Video filter: single-pass composite with transparency
-    # Critical chain: format=rgba before transparent pad → format=auto on both overlays
-    BG_SCALE_FILTER=""
-    [ -n "$OUTPUT_WIDTH" ] && BG_SCALE_FILTER=",scale=${OUT_W}:${OUT_H}"
-    VIDEO_FILTER="\
-[0:v]trim=${BG_START_I}:${BG_END_I},setpts=PTS-STARTPTS${BG_SCALE_FILTER}[bg];\
-[1:v]trim=${SCR_START_I}:${SCR_END_I},setpts=PTS-STARTPTS,\
-scale=${SCREEN_W}:${SCREEN_H}:force_original_aspect_ratio=decrease,\
-pad=${SCREEN_W}:${SCREEN_H}:(ow-iw)/2:(oh-ih)/2:black,\
-format=rgba[footage];\
-[footage]pad=${BEZEL_W}:${BEZEL_H}:${X_OFF}:${Y_OFF}:color=black@0[canvas];\
-[canvas][2:v]overlay=0:0:format=auto[bezeled];\
-[bezeled]scale=${OVL_W}:${OVL_H}[scaled];\
-[bg][scaled]overlay=${OVL_X}:${OVL_Y}:format=auto[out]"
-
-    case "$AUDIO_MODE" in
-        both)
-            if [ "$BG_HAS_AUDIO" = "audio" ] && [ "$SCR_HAS_AUDIO" = "audio" ]; then
-                # Mix both — normalize=0 prevents amix from halving each channel's volume
-                FILTER="${VIDEO_FILTER};\
-[0:a]atrim=${BG_START_I}:${BG_END_I},asetpts=PTS-STARTPTS[abg];\
-[1:a]atrim=${SCR_START_I}:${SCR_END_I},asetpts=PTS-STARTPTS[ascr];\
-[abg][ascr]amix=inputs=2:duration=shortest:normalize=0[aout]"
-                AUDIO_ARGS=(-map "[aout]" -c:a aac -b:a 192k)
-            elif [ "$BG_HAS_AUDIO" = "audio" ]; then
-                FILTER="${VIDEO_FILTER};[0:a]atrim=${BG_START_I}:${BG_END_I},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_ARGS=(-map "[aout]" -c:a aac -b:a 128k)
-            elif [ "$SCR_HAS_AUDIO" = "audio" ]; then
-                FILTER="${VIDEO_FILTER};[1:a]atrim=${SCR_START_I}:${SCR_END_I},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_ARGS=(-map "[aout]" -c:a aac -b:a 128k)
-            else
-                FILTER="$VIDEO_FILTER"; AUDIO_ARGS=()
-            fi ;;
-        bg)
-            if [ "$BG_HAS_AUDIO" = "audio" ]; then
-                FILTER="${VIDEO_FILTER};[0:a]atrim=${BG_START_I}:${BG_END_I},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_ARGS=(-map "[aout]" -c:a aac -b:a 128k)
-            else
-                echo "Warning: --audio bg requested but background has no audio stream. No audio in output."
-                FILTER="$VIDEO_FILTER"; AUDIO_ARGS=()
-            fi ;;
-        screen)
-            if [ "$SCR_HAS_AUDIO" = "audio" ]; then
-                FILTER="${VIDEO_FILTER};[1:a]atrim=${SCR_START_I}:${SCR_END_I},asetpts=PTS-STARTPTS[aout]"
-                AUDIO_ARGS=(-map "[aout]" -c:a aac -b:a 128k)
-            else
-                echo "Warning: --audio screen requested but screen recording has no audio stream. No audio in output."
-                FILTER="$VIDEO_FILTER"; AUDIO_ARGS=()
-            fi ;;
-        none)
-            FILTER="$VIDEO_FILTER"; AUDIO_ARGS=() ;;
-        *)
-            echo "Error: --audio must be one of: both, bg, screen, none"
-            exit 1 ;;
-    esac
-
-    ffmpeg \
-        -progress "$WORK_DIR/progress_${i}.txt" \
-        -i "$BG" -i "$SCR" -i "$BEZEL" \
-        -filter_complex "$FILTER" \
-        -map "[out]" "${AUDIO_ARGS[@]}" \
-        -c:v hevc_videotoolbox -b:v "${OUTPUT_BITRATE}" -tag:v hvc1 \
-        -y "$CHUNK_OUT" \
-        > "$WORK_DIR/chunk_${i}.log" 2>&1 &
-    PIDS+=($!)
-done
-
-# ── Progress bar ──────────────────────────────────────────────────────────────
-START_SECS=$(date +%s)
-declare -a CHUNK_DONE
-for i in $(seq 0 $((N_JOBS - 1))); do CHUNK_DONE[$i]=0; done
-DONE_COUNT=0
-FAILED=false
-
-while [ $DONE_COUNT -lt $N_JOBS ]; do
-    sleep 0.3
-    DONE_COUNT=0
-
-    for i in "${!PIDS[@]}"; do
-        if [ "${CHUNK_DONE[$i]}" = "1" ]; then
-            DONE_COUNT=$((DONE_COUNT + 1)); continue
-        fi
-        PROG="$WORK_DIR/progress_${i}.txt"
-        if [ -f "$PROG" ] && grep -q '^progress=end$' "$PROG" 2>/dev/null; then
-            CHUNK_DONE[$i]=1; DONE_COUNT=$((DONE_COUNT + 1))
-            if ! wait "${PIDS[$i]}" 2>/dev/null; then FAILED=true; fi
-        elif ! kill -0 "${PIDS[$i]}" 2>/dev/null; then
-            CHUNK_DONE[$i]=1; DONE_COUNT=$((DONE_COUNT + 1))
-            if ! wait "${PIDS[$i]}"; then FAILED=true; fi
-        fi
-    done
-
-    BAR_LINE=$(python3 - "$WORK_DIR" "$N_JOBS" "$TOTAL_FRAMES" \
-                         "$(($(date +%s) - START_SECS))" "$DONE_COUNT" <<'PYEOF'
-import sys
-work_dir, n_jobs, total_frames = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-elapsed, done_chunks = int(sys.argv[4]), int(sys.argv[5])
-
-total_done, speed_vals = 0, []
-for i in range(n_jobs):
-    try:
-        lines = open(f"{work_dir}/progress_{i}.txt").read().splitlines()
-        frames = [int(l.split('=',1)[1]) for l in lines if l.startswith('frame=')]
-        if frames: total_done += frames[-1]
-        for l in lines:
-            if l.startswith('speed='):
-                try: speed_vals.append(float(l.split('=',1)[1].strip().rstrip('x')))
-                except: pass
-    except: pass
-
-# Force 100% when all chunks complete (avoids stalling at 99% due to rounding)
-if done_chunks == n_jobs:
-    pct = 100
-else:
-    pct = min(99, int(total_done * 100 / total_frames)) if total_frames else 0
-
-W = 26
-bar = '█' * int(W * pct / 100) + '░' * (W - int(W * pct / 100))
-def fmt_duration(s):
-    s = int(s)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    if h:   return f"{h}h {m:02d}m {sec:02d}s"
-    elif m: return f"{m}m {sec:02d}s"
-    else:   return f"{sec}s"
-
-speed = f"  {sum(speed_vals)/len(speed_vals):.1f}x" if speed_vals else ""
-eta_secs = int(elapsed*(100-pct)/pct) if pct >= 3 and pct < 100 and elapsed > 0 else None
-eta   = f"  eta ~{fmt_duration(eta_secs)}" if eta_secs is not None else ""
-elapsed_str = fmt_duration(elapsed)
-print(f"  [{bar}] {pct:3d}%  {elapsed_str} elapsed{eta}{speed}", end='')
-PYEOF
-    )
-    printf "\r%s\033[K" "$BAR_LINE"
-done
-
-printf "\n"
-if $FAILED; then
-    echo "One or more chunks failed. Check logs in: $WORK_DIR"
-    for i in "${!CHUNK_DONE[@]}"; do
-        log="$WORK_DIR/chunk_${i}.log"
-        [ -f "$log" ] && echo "  chunk $i: $log"
-    done
-    exit 1
-fi
-
-# ── Merge chunks ──────────────────────────────────────────────────────────────
-echo ""
-echo "Merging ${N_JOBS} chunks..."
-printf "file '%s'\n" "$WORK_DIR"/chunk_????.mp4 > "$WORK_DIR/concat.txt"
-ffmpeg -f concat -safe 0 -i "$WORK_DIR/concat.txt" -c copy -y "$OUTPUT" 2>/dev/null
-
-# ── Verify output duration ────────────────────────────────────────────────────
-OUTPUT_DURATION=$(ffprobe -v error -show_entries format=duration \
-    -of csv=p=0 "$OUTPUT" 2>/dev/null)
-DURATION_OK=$(python3 -c "print('true' if abs(float('$OUTPUT_DURATION') - float('$ACTIVE_DURATION')) < 1.0 else 'false')")
-
-if [ "$DURATION_OK" = "false" ]; then
-    echo ""
-    echo "ERROR: output duration (${OUTPUT_DURATION}s) doesn't match expected (${ACTIVE_DURATION}s)"
-    echo "The composite file may have errors. Check logs in: $WORK_DIR"
-    exit 1
-fi
-
-echo ""
-echo "Done: $OUTPUT (${OUTPUT_DURATION}s)"
+ffmpeg -i "$TEMP_VIDEO" -i "$BG" -i "$SCR" \
+    -map 0:v "${AUDIO_MUXARGS[@]}" \
+    -c:v copy -tag:v hvc1 \
+    -y "$OUTPUT" 2>&1

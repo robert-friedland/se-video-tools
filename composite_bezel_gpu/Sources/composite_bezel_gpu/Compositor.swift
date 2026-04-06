@@ -18,7 +18,7 @@ final class Compositor: @unchecked Sendable {
     private(set) var failed = false
 
     // ── Init parameters ────────────────────────────────────────────────────────
-    private let bgURL: URL
+    private let bgURL: URL?
     private let scrURL: URL
     private let bezelURL: URL
     private let outputURL: URL
@@ -28,14 +28,15 @@ final class Compositor: @unchecked Sendable {
     private let activeDuration: Double
     private let outputBitrate: Int
     private let bgBitrate: Int
-    private let bgPreferredTransform: CGAffineTransform
+    private let bgPreferredTransform: CGAffineTransform?
     private let scrPreferredTransform: CGAffineTransform
     private let totalFrames: Int    // for progress reporting
     private let bgRotationOverride: Int?
     private let scrRotationOverride: Int?
+    private let bgColor: CGColor?
 
     init(
-        bgURL: URL,
+        bgURL: URL?,
         scrURL: URL,
         bezelURL: URL,
         outputURL: URL,
@@ -44,34 +45,41 @@ final class Compositor: @unchecked Sendable {
         scrStart: Double,
         activeDuration: Double,
         bgBitrate: Int,
-        bgPreferredTransform: CGAffineTransform,
+        outputBitrate: Int,
+        bgPreferredTransform: CGAffineTransform?,
         scrPreferredTransform: CGAffineTransform,
         totalFrames: Int,
         bgRotationOverride: Int? = nil,
-        scrRotationOverride: Int? = nil
+        scrRotationOverride: Int? = nil,
+        bgColor: CGColor? = nil
     ) {
-        self.bgURL                = bgURL
-        self.scrURL               = scrURL
-        self.bezelURL             = bezelURL
-        self.outputURL            = outputURL
-        self.dims                 = dims
-        self.bgStart              = bgStart
-        self.scrStart             = scrStart
-        self.activeDuration       = activeDuration
-        self.bgBitrate            = bgBitrate
-        self.outputBitrate        = max(500_000, Int(Double(bgBitrate) * 0.75))
-        self.bgPreferredTransform = bgPreferredTransform
+        self.bgURL                 = bgURL
+        self.scrURL                = scrURL
+        self.bezelURL              = bezelURL
+        self.outputURL             = outputURL
+        self.dims                  = dims
+        self.bgStart               = bgStart
+        self.scrStart              = scrStart
+        self.activeDuration        = activeDuration
+        self.bgBitrate             = bgBitrate
+        self.outputBitrate         = outputBitrate
+        self.bgPreferredTransform  = bgPreferredTransform
         self.scrPreferredTransform = scrPreferredTransform
-        self.totalFrames          = totalFrames
-        self.bgRotationOverride   = bgRotationOverride
-        self.scrRotationOverride  = scrRotationOverride
+        self.totalFrames           = totalFrames
+        self.bgRotationOverride    = bgRotationOverride
+        self.scrRotationOverride   = scrRotationOverride
+        self.bgColor               = bgColor
     }
 
     // ── Public entry point ─────────────────────────────────────────────────────
     func start(sema: DispatchSemaphore) {
         queue.async { [self] in
             do {
-                try self.run(sema: sema)
+                if let bgColor = self.bgColor {
+                    try self.runSolid(sema: sema, bgColor: bgColor)
+                } else {
+                    try self.run(sema: sema)
+                }
             } catch {
                 fputs("Error: \(error)\n", stderr)
                 self.failed = true
@@ -80,8 +88,219 @@ final class Compositor: @unchecked Sendable {
         }
     }
 
+    // ── Solid background mode ──────────────────────────────────────────────────
+    private func runSolid(sema: DispatchSemaphore, bgColor: CGColor) throws {
+        // ── Metal CIContext ────────────────────────────────────────────────────
+        guard let metalDevice = MTLCreateSystemDefaultDevice() else {
+            throw CompositorError.noMetalDevice
+        }
+        let ciCtx = CIContext(mtlDevice: metalDevice, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputPremultiplied: false,
+            .cacheIntermediates: true,
+        ])
+
+        // ── Load bezel PNG (once) ──────────────────────────────────────────────
+        guard let bezelCI = CIImage(
+            contentsOf: bezelURL,
+            options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]
+        ) else {
+            throw CompositorError.bezelLoadFailed(bezelURL.path)
+        }
+
+        // Pre-compute solid background — same image every frame
+        let bgCI = CIImage(color: CIColor(cgColor: bgColor))
+            .cropped(to: CGRect(x: 0, y: 0, width: dims.outW, height: dims.outH))
+
+        // ── Configure screen reader ────────────────────────────────────────────
+        let scrAsset = AVAsset(url: scrURL)
+        let decodeOpts: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String:
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        ]
+        let scrReader = try AVAssetReader(asset: scrAsset)
+        guard let scrTrack = scrAsset.tracks(withMediaType: .video).first else {
+            throw CompositorError.noVideoTrack
+        }
+        let scrOut = AVAssetReaderTrackOutput(track: scrTrack, outputSettings: decodeOpts)
+        scrOut.alwaysCopiesSampleData = false
+        scrReader.add(scrOut)
+
+        let ts: CMTimeScale = 600
+        scrReader.timeRange = CMTimeRange(
+            start:    CMTime(seconds: scrStart,       preferredTimescale: ts),
+            duration: CMTime(seconds: activeDuration, preferredTimescale: ts)
+        )
+        guard scrReader.startReading() else {
+            throw CompositorError.readerFailed("scr", scrReader.error)
+        }
+
+        // ── Configure writer ───────────────────────────────────────────────────
+        try? FileManager.default.removeItem(at: outputURL)
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+
+        let colorProps: [String: Any] = [
+            AVVideoColorPrimariesKey:       AVVideoColorPrimaries_ITU_R_709_2,
+            AVVideoTransferFunctionKey:     AVVideoTransferFunction_ITU_R_709_2,
+            AVVideoYCbCrMatrixKey:          AVVideoYCbCrMatrix_ITU_R_709_2,
+        ]
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey:    AVVideoCodecType.hevc,
+            AVVideoWidthKey:    dims.outW,
+            AVVideoHeightKey:   dims.outH,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey:   outputBitrate,
+                AVVideoProfileLevelKey:     "HEVC_Main_AutoLevel",
+            ],
+            AVVideoColorPropertiesKey: colorProps,
+        ]
+
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        videoInput.expectsMediaDataInRealTime = false
+
+        let poolAttrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey          as String: dims.outW,
+            kCVPixelBufferHeightKey         as String: dims.outH,
+            kCVPixelBufferPoolMinimumBufferCountKey as String: 16,
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: videoInput,
+            sourcePixelBufferAttributes: poolAttrs
+        )
+
+        writer.add(videoInput)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        let scrOrigin = scrReader.timeRange.start
+        let wallStart = Date()
+        var frameCount = 0
+
+        // ── Frame loop ─────────────────────────────────────────────────────────
+        videoInput.requestMediaDataWhenReady(on: queue) { [self] in
+            while videoInput.isReadyForMoreMediaData {
+                guard let scrSample = scrOut.copyNextSampleBuffer() else {
+                    if scrReader.status == .completed {
+                        videoInput.markAsFinished()
+                        writer.finishWriting { sema.signal() }
+                    } else {
+                        fputs("Error: scr reader failed: \(scrReader.error?.localizedDescription ?? "unknown")\n", stderr)
+                        self.failed = true
+                        writer.cancelWriting()
+                        sema.signal()
+                    }
+                    return
+                }
+
+                guard let scrBuf = CMSampleBufferGetImageBuffer(scrSample) else { continue }
+                let rawScrPTS = CMSampleBufferGetPresentationTimeStamp(scrSample)
+                let relScrPTS = CMTimeSubtract(rawScrPTS, scrOrigin)
+
+                // ── GPU composite ──────────────────────────────────────────────
+                var scrCI = CIImage(cvPixelBuffer: scrBuf)
+
+                if let deg = self.scrRotationOverride {
+                    scrCI = self.applyExplicitRotation(scrCI, degrees: deg)
+                } else {
+                    scrCI = self.applyRotation(scrCI, transform: self.scrPreferredTransform)
+                }
+
+                let d = self.dims
+
+                // Scale screen content to fit bezel screen area
+                let preScrW = scrCI.extent.width
+                let preScrH = scrCI.extent.height
+                let scrScaleX = Double(d.screenW) / Double(preScrW)
+                let scrScaleY = Double(d.screenH) / Double(preScrH)
+                let scrScale = min(scrScaleX, scrScaleY)
+                let scaledScrW = CGFloat(Double(preScrW) * scrScale)
+                let scaledScrH = CGFloat(Double(preScrH) * scrScale)
+                scrCI = scrCI.applyingFilter("CIBicubicScaleTransform", parameters: [
+                    "inputScale": scrScale,
+                ])
+
+                // Center screen on transparent bezel canvas
+                let centeredXOff   = (CGFloat(DimensionCalc.bezelW) - scaledScrW) / 2
+                let centeredYOffCI = (CGFloat(DimensionCalc.bezelH) - scaledScrH) / 2
+
+                let canvas = CIImage(color: .clear).cropped(
+                    to: CGRect(x: 0, y: 0, width: DimensionCalc.bezelW, height: DimensionCalc.bezelH)
+                )
+                let scrOnCanvas = scrCI
+                    .transformed(by: CGAffineTransform(
+                        translationX: centeredXOff,
+                        y:            centeredYOffCI
+                    ))
+                    .composited(over: canvas)
+
+                // Composite bezel PNG over screen
+                let bezeled = bezelCI.composited(over: scrOnCanvas)
+
+                // Scale bezeled iPad to overlay size
+                let bezScaleX = Double(d.ovlW) / bezeled.extent.width
+                let bezScaleY = Double(d.ovlH) / bezeled.extent.height
+                let bezScaled = bezeled.applyingFilter("CIBicubicScaleTransform", parameters: [
+                    "inputScale":       min(bezScaleX, bezScaleY),
+                    "inputAspectRatio": bezScaleX / bezScaleY,
+                ])
+
+                // Position overlay over solid background
+                let bezPos = bezScaled.transformed(by: CGAffineTransform(
+                    translationX: CGFloat(d.ovlX),
+                    y:            CGFloat(d.ovlYCI)
+                ))
+                let result = bezPos.composited(over: bgCI)
+
+                // ── Render to output buffer ────────────────────────────────────
+                var outBuf: CVPixelBuffer?
+                let poolStatus = CVPixelBufferPoolCreatePixelBuffer(
+                    nil, adaptor.pixelBufferPool!, &outBuf
+                )
+                guard poolStatus == kCVReturnSuccess, let outBuf else {
+                    fputs("Error: pixel buffer pool exhausted\n", stderr)
+                    self.failed = true
+                    writer.cancelWriting()
+                    sema.signal()
+                    return
+                }
+
+                ciCtx.render(
+                    result,
+                    to: outBuf,
+                    bounds: CGRect(x: 0, y: 0, width: d.outW, height: d.outH),
+                    colorSpace: nil
+                )
+
+                adaptor.append(outBuf, withPresentationTime: relScrPTS)
+
+                frameCount += 1
+                if frameCount % 30 == 0 {
+                    let elapsed = -wallStart.timeIntervalSinceNow
+                    let fps = elapsed > 0 ? Double(frameCount) / elapsed : 0
+                    let totalF = self.totalFrames
+                    let pct = totalF > 0 ? Int(Double(frameCount) * 100 / Double(totalF)) : 0
+                    let rtMultiplier = self.activeDuration > 0
+                        ? fps / (Double(totalF) / self.activeDuration) : 0
+                    let etaSecs = fps > 0 && totalF > frameCount
+                        ? Double(totalF - frameCount) / fps : 0
+                    fputs(
+                        "\rFrame \(frameCount)/\(totalF) (\(pct)%) — \(String(format: "%.1f", fps)) fps" +
+                        " — \(String(format: "%.1f", rtMultiplier))× real-time" +
+                        " — \(Self.fmtETA(etaSecs))   ",
+                        stderr
+                    )
+                }
+            }
+        }
+    }
+
     // ── Main compositing loop ──────────────────────────────────────────────────
     private func run(sema: DispatchSemaphore) throws {
+        guard let bgURL = bgURL, let bgPreferredTransform = bgPreferredTransform else {
+            throw CompositorError.missingBgInputs
+        }
+
         // ── Metal CIContext ────────────────────────────────────────────────────
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             throw CompositorError.noMetalDevice
@@ -257,7 +476,7 @@ final class Compositor: @unchecked Sendable {
                 if let deg = self.bgRotationOverride {
                     bgCI = self.applyExplicitRotation(bgCI, degrees: deg)
                 } else {
-                    bgCI = self.applyRotation(bgCI, transform: self.bgPreferredTransform)
+                    bgCI = self.applyRotation(bgCI, transform: bgPreferredTransform)
                 }
                 if let deg = self.scrRotationOverride {
                     scrCI = self.applyExplicitRotation(scrCI, degrees: deg)
@@ -360,12 +579,32 @@ final class Compositor: @unchecked Sendable {
                     fputs(
                         "\rFrame \(frameCount)/\(totalF) (\(pct)%) — \(String(format: "%.1f", fps)) fps" +
                         " — \(String(format: "%.1f", rtMultiplier))× real-time" +
-                        " — elapsed \(Int(elapsed))s / ETA \(Int(etaSecs))s   ",
+                        " — \(Self.fmtETA(etaSecs))   ",
                         stderr
                     )
                 }
             }
         }
+    }
+
+    // ── Progress helpers ───────────────────────────────────────────────────────
+
+    private static func fmtDur(_ s: Double) -> String {
+        let n = Int(s)
+        let h = n / 3600, m = (n % 3600) / 60, sec = n % 60
+        if h > 0 { return "\(h)hr \(m)m \(sec)s" }
+        if m > 0 { return "\(m)m \(sec)s" }
+        return "\(sec)s"
+    }
+
+    private static func fmtETA(_ etaSecs: Double) -> String {
+        guard etaSecs > 0 else { return "ETA ..." }
+        let etaDate = Date().addingTimeInterval(etaSecs)
+        let fmt = DateFormatter()
+        fmt.dateFormat = "h:mma"
+        fmt.amSymbol = "am"
+        fmt.pmSymbol = "pm"
+        return "ETA \(fmt.string(from: etaDate)) (\(fmtDur(etaSecs)))"
     }
 
     // ── Rotation helpers ───────────────────────────────────────────────────────
@@ -421,6 +660,7 @@ enum CompositorError: Error, CustomStringConvertible {
     case bezelLoadFailed(String)
     case noVideoTrack
     case readerFailed(String, Error?)
+    case missingBgInputs
 
     var description: String {
         switch self {
@@ -429,6 +669,7 @@ enum CompositorError: Error, CustomStringConvertible {
         case .noVideoTrack:             return "No video track found in asset"
         case .readerFailed(let s, let e):
             return "Asset reader (\(s)) failed: \(e?.localizedDescription ?? "unknown")"
+        case .missingBgInputs:          return "Background URL and transform required in normal mode"
         }
     }
 }
