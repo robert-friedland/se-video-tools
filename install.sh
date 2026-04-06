@@ -47,6 +47,17 @@ chmod +x "$INSTALL_DIR/composite_bezel.sh"
 ln -sf "$INSTALL_DIR/composite_bezel.sh" "$BREW_BIN/composite_bezel"
 echo "✓ composite_bezel installed → $BREW_BIN/composite_bezel"
 
+# Download composite_bezel_gpu binary (Apple Silicon GPU compositor)
+BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
+echo "Downloading composite_bezel_gpu (GPU accelerator)..."
+curl -fL "$BINARY_URL" -o "$INSTALL_DIR/composite_bezel_gpu" && {
+    chmod +x "$INSTALL_DIR/composite_bezel_gpu"
+    codesign -s - "$INSTALL_DIR/composite_bezel_gpu"
+    xattr -d com.apple.quarantine "$INSTALL_DIR/composite_bezel_gpu" 2>/dev/null || true
+    ln -sf "$INSTALL_DIR/composite_bezel_gpu" "$BREW_BIN/composite_bezel_gpu"
+    echo "✓ composite_bezel_gpu installed → $BREW_BIN/composite_bezel_gpu"
+} || echo "  composite_bezel_gpu not available (Intel Mac or GitHub Release not yet published — CPU fallback active)"
+
 # Download sync_clap script
 echo "Downloading sync_clap..."
 curl -fsSL "${GITHUB_RAW_BASE}/sync_clap.sh" -o "$INSTALL_DIR/sync_clap.sh"
