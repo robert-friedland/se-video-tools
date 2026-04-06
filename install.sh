@@ -52,13 +52,19 @@ echo "✓ composite_bezel installed → $BREW_BIN/composite_bezel"
 # Download composite_bezel_gpu binary (Apple Silicon GPU compositor)
 BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
 echo "Downloading composite_bezel_gpu (GPU accelerator)..."
-curl -fL "$BINARY_URL" -o "$INSTALL_DIR/composite_bezel_gpu" && {
+_BIN_TMP=$(mktemp /tmp/composite_bezel_gpu_XXXXXX)
+if curl -fL "$BINARY_URL" -o "$_BIN_TMP" 2>/dev/null && [ -s "$_BIN_TMP" ]; then
+    mv "$_BIN_TMP" "$INSTALL_DIR/composite_bezel_gpu"
     chmod +x "$INSTALL_DIR/composite_bezel_gpu"
     codesign -s - "$INSTALL_DIR/composite_bezel_gpu"
     xattr -d com.apple.quarantine "$INSTALL_DIR/composite_bezel_gpu" 2>/dev/null || true
     ln -sf "$INSTALL_DIR/composite_bezel_gpu" "$BREW_BIN/composite_bezel_gpu"
     echo "✓ composite_bezel_gpu installed → $BREW_BIN/composite_bezel_gpu"
-} || echo "  composite_bezel_gpu not available (Apple Silicon required or GitHub Release not yet published)"
+else
+    rm -f "$_BIN_TMP"
+    echo "  composite_bezel_gpu download failed (GitHub Release not yet published or network error)"
+    echo "  Build from source: see composite_bezel_gpu/README or CLAUDE.md"
+fi
 
 # Download sync_clap script
 echo "Downloading sync_clap..."
