@@ -68,4 +68,21 @@ Key coordinate system note: `AVAssetTrack.preferredTransform` is UIKit (Y-down).
 ## GitHub
 
 Repo: `robert-friedland/se-video-tools`
-Binary attached to GitHub Releases as `composite_bezel_gpu` (downloaded by `install.sh`)
+Binary attached to GitHub Releases as `composite_bezel_gpu` (downloaded by `install.sh` and `composite_bezel update`)
+
+## Release checklist
+
+When cutting a new release (or after merging any PR that changes Swift source):
+
+1. Build the binary (see "Building composite_bezel_gpu" above)
+2. Upload to the release:
+   ```bash
+   gh release upload <tag> composite_bezel_gpu_bin -R robert-friedland/se-video-tools
+   ```
+   Or via the GitHub UI: Releases → edit the release → attach the binary.
+3. Verify the asset is present:
+   ```bash
+   gh release view <tag> -R robert-friedland/se-video-tools --json assets
+   ```
+   The `assets` array must be non-empty. If empty, `composite_bezel update` will warn that the
+   download failed (but will preserve any existing local binary — it no longer corrupts it).
