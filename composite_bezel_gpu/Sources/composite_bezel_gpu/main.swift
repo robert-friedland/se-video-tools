@@ -11,18 +11,20 @@ struct CompositeBezelGPU: ParsableCommand {
     )
 
     // ── Positional arguments ────────────────────────────────────────────────────
-    @Argument(help: "Background video file")
+    // Normal mode:  background screen  (both provided)
+    // Solid mode:   screen             (only first positional, background = screen recording)
+    @Argument(help: "Background video file (normal mode) or screen recording (--bg-color mode)")
     var background: String
 
-    @Argument(help: "Screen recording file")
-    var screen: String
+    @Argument(help: "Screen recording file (normal mode only; omit when using --bg-color)")
+    var screen: String?
 
     // ── Required options ────────────────────────────────────────────────────────
     @Option(help: "Path to bezel PNG (required; shell passes --bezel \"$BEZEL\")")
     var bezel: String
 
     // ── Optional output ─────────────────────────────────────────────────────────
-    @Option(help: "Output file path (default: derived from background filename)")
+    @Option(help: "Output file path (default: derived from source filename)")
     var output: String?
 
     // ── Overlay options ─────────────────────────────────────────────────────────
@@ -51,6 +53,16 @@ struct CompositeBezelGPU: ParsableCommand {
     )
     var duration: Double?
 
+    // ── Solid background mode ───────────────────────────────────────────────────
+    @Option(
+        name: .customLong("bg-color"),
+        help: "Solid background color as 6-digit hex (e.g. 000000). Use instead of a background video; output will be bezel canvas size 1780x2550."
+    )
+    var bgColor: String?
+
+    @Option(help: "Output bitrate in bps (used when --bg-color is set; default: 60% of screen bitrate)")
+    var bitrate: Int?
+
     // ── Passthrough options (accepted, handled by shell wrapper) ────────────────
     @Option(help: "Audio mode: both|bg|screen|none (accepted; audio is done by the shell ffmpeg pass)")
     var audio: String = "both"
@@ -71,19 +83,30 @@ struct CompositeBezelGPU: ParsableCommand {
 
     // ── Run ─────────────────────────────────────────────────────────────────────
     func run() throws {
-        let bgURL    = URL(fileURLWithPath: background)
-        let scrURL   = URL(fileURLWithPath: screen)
         let bezelURL = URL(fileURLWithPath: bezel)
+        guard FileManager.default.fileExists(atPath: bezelURL.path) else {
+            throw ValidationError("Bezel file not found: \(bezel)")
+        }
 
-        // Validate inputs
+        // ── Solid background mode ──────────────────────────────────────────────
+        if let bgColorHex = bgColor {
+            try runSolidMode(bgColorHex: bgColorHex, bezelURL: bezelURL)
+            return
+        }
+
+        // ── Normal mode (background video + screen recording) ──────────────────
+        guard let screenPath = screen else {
+            throw ValidationError("Provide a screen recording file as the second argument, or use --bg-color for solid background mode.")
+        }
+
+        let bgURL  = URL(fileURLWithPath: background)
+        let scrURL = URL(fileURLWithPath: screenPath)
+
         guard FileManager.default.fileExists(atPath: bgURL.path) else {
             throw ValidationError("Background file not found: \(background)")
         }
         guard FileManager.default.fileExists(atPath: scrURL.path) else {
-            throw ValidationError("Screen recording not found: \(screen)")
-        }
-        guard FileManager.default.fileExists(atPath: bezelURL.path) else {
-            throw ValidationError("Bezel file not found: \(bezel)")
+            throw ValidationError("Screen recording not found: \(screenPath)")
         }
 
         let outputPath: String
@@ -104,10 +127,9 @@ struct CompositeBezelGPU: ParsableCommand {
             throw ValidationError("No video track found in background: \(background)")
         }
         guard let scrTrack = scrAsset.tracks(withMediaType: .video).first else {
-            throw ValidationError("No video track found in screen recording: \(screen)")
+            throw ValidationError("No video track found in screen recording: \(screenPath)")
         }
 
-        // Rotation-adjusted effective dimensions
         let bgTransform  = bgTrack.preferredTransform
         let scrTransform = scrTrack.preferredTransform
 
@@ -117,8 +139,6 @@ struct CompositeBezelGPU: ParsableCommand {
         let bgEffSize  = effectiveSize(naturalSize: bgNatSize,  transform: bgTransform)
         let scrEffSize = effectiveSize(naturalSize: scrNatSize, transform: scrTransform)
 
-        // Apply rotation overrides: when specified, recompute effective size from the
-        // override angle (90°/270° → transpose width/height; 0°/180° → keep as-is).
         let finalBgEffSize: CGSize = bgRotation.map { deg in
             deg % 180 != 0
                 ? CGSize(width: bgNatSize.height, height: bgNatSize.width)
@@ -131,14 +151,12 @@ struct CompositeBezelGPU: ParsableCommand {
                 : scrNatSize
         } ?? scrEffSize
 
-        // Background bitrate (stream → container → floor)
         var bgBitrate = Int(bgTrack.estimatedDataRate)
         if bgBitrate == 0 {
             bgBitrate = Int(bgAsset.tracks.reduce(0.0) { $0 + $1.estimatedDataRate })
         }
         if bgBitrate == 0 { bgBitrate = 10_000_000 }
 
-        // Active duration
         let bgDuration  = bgAsset.duration.seconds
         let scrDuration = scrAsset.duration.seconds
         let bgRemaining  = bgDuration  - bgStart
@@ -154,11 +172,9 @@ struct CompositeBezelGPU: ParsableCommand {
             throw ValidationError("Active duration is zero or negative. Check --bg-start and --scr-start values.")
         }
 
-        // Total frame count for progress display
         let fps = bgTrack.nominalFrameRate > 0 ? Double(bgTrack.nominalFrameRate) : 30.0
         let totalFrames = max(1, Int(fps * activeDuration + 0.5))
 
-        // Dimension calculations
         let dims = DimensionCalc(
             bgEffW:       Int(finalBgEffSize.width),
             bgEffH:       Int(finalBgEffSize.height),
@@ -169,7 +185,6 @@ struct CompositeBezelGPU: ParsableCommand {
             yOverride:    y
         )
 
-        // Summary
         fputs("Background:      \(Int(finalBgEffSize.width))x\(Int(finalBgEffSize.height)) — \(String(format: "%.1f", bgDuration))s @ \(bgBitrate)bps\n", stderr)
         fputs("Screen:          \(Int(finalScrEffSize.width))x\(Int(finalScrEffSize.height)) — \(String(format: "%.1f", scrDuration))s\n", stderr)
         fputs("Active duration: \(String(format: "%.2f", activeDuration))s\n", stderr)
@@ -177,23 +192,138 @@ struct CompositeBezelGPU: ParsableCommand {
         fputs("Overlay:         \(dims.ovlW)x\(dims.ovlH) at (\(dims.ovlX), \(dims.ovlY))\n", stderr)
         fputs("GPU compositing starting...\n", stderr)
 
-        // ── Run compositor ─────────────────────────────────────────────────────
         let sema = DispatchSemaphore(value: 0)
         let compositor = Compositor(
-            bgURL:                bgURL,
-            scrURL:               scrURL,
-            bezelURL:             bezelURL,
-            outputURL:            outputURL,
-            dims:                 dims,
-            bgStart:              bgStart,
-            scrStart:             scrStart,
-            activeDuration:       activeDuration,
-            bgBitrate:            bgBitrate,
-            bgPreferredTransform: bgTransform,
+            bgURL:                 bgURL,
+            scrURL:                scrURL,
+            bezelURL:              bezelURL,
+            outputURL:             outputURL,
+            dims:                  dims,
+            bgStart:               bgStart,
+            scrStart:              scrStart,
+            activeDuration:        activeDuration,
+            bgBitrate:             bgBitrate,
+            outputBitrate:         max(500_000, Int(Double(bgBitrate) * 0.75)),
+            bgPreferredTransform:  bgTransform,
             scrPreferredTransform: scrTransform,
-            totalFrames:          totalFrames,
-            bgRotationOverride:   bgRotation,
-            scrRotationOverride:  scrRotation
+            totalFrames:           totalFrames,
+            bgRotationOverride:    bgRotation,
+            scrRotationOverride:   scrRotation
+        )
+        compositor.start(sema: sema)
+        sema.wait()
+
+        fputs("\n", stderr)
+
+        if compositor.failed {
+            throw ExitCode(1)
+        }
+
+        fputs("Done: \(outputPath)\n", stderr)
+    }
+
+    // ── Solid background mode ────────────────────────────────────────────────────
+    private func runSolidMode(bgColorHex: String, bezelURL: URL) throws {
+        // In solid mode, `background` holds the screen recording path
+        let scrURL = URL(fileURLWithPath: background)
+        guard FileManager.default.fileExists(atPath: scrURL.path) else {
+            throw ValidationError("Screen recording not found: \(background)")
+        }
+
+        // Parse hex color
+        let hex = bgColorHex.hasPrefix("0x") || bgColorHex.hasPrefix("0X")
+            ? String(bgColorHex.dropFirst(2)) : bgColorHex
+        guard hex.count == 6, let rgb = UInt32(hex, radix: 16) else {
+            throw ValidationError("Invalid --bg-color value '\(bgColorHex)'. Expected 6-digit hex, e.g. 000000.")
+        }
+        let r = CGFloat((rgb >> 16) & 0xFF) / 255.0
+        let g = CGFloat((rgb >> 8)  & 0xFF) / 255.0
+        let b = CGFloat(rgb         & 0xFF) / 255.0
+        let bgCGColor = CGColor(red: r, green: g, blue: b, alpha: 1.0)
+
+        let outputPath: String
+        if let out = output {
+            outputPath = out
+        } else {
+            let base = scrURL.deletingPathExtension().lastPathComponent
+            outputPath = scrURL.deletingLastPathComponent()
+                .appendingPathComponent("\(base)_bezeled.mp4").path
+        }
+        let outputURL = URL(fileURLWithPath: outputPath)
+
+        let scrAsset = AVAsset(url: scrURL)
+        guard let scrTrack = scrAsset.tracks(withMediaType: .video).first else {
+            throw ValidationError("No video track found in screen recording: \(background)")
+        }
+
+        let scrTransform = scrTrack.preferredTransform
+        let scrNatSize   = scrTrack.naturalSize
+
+        let scrEffSize: CGSize = scrRotation.map { deg in
+            deg % 180 != 0
+                ? CGSize(width: scrNatSize.height, height: scrNatSize.width)
+                : scrNatSize
+        } ?? effectiveSize(naturalSize: scrNatSize, transform: scrTransform)
+
+        var scrBitrate = Int(scrTrack.estimatedDataRate)
+        if scrBitrate == 0 {
+            scrBitrate = Int(scrAsset.tracks.reduce(0.0) { $0 + $1.estimatedDataRate })
+        }
+        if scrBitrate == 0 { scrBitrate = 8_000_000 }
+
+        let scrDuration   = scrAsset.duration.seconds
+        let scrRemaining  = scrDuration - scrStart
+        let activeDuration: Double
+        if let d = duration {
+            activeDuration = d
+        } else {
+            activeDuration = scrRemaining
+        }
+
+        guard activeDuration > 0 else {
+            throw ValidationError("Active duration is zero or negative.")
+        }
+
+        let fps = scrTrack.nominalFrameRate > 0 ? Double(scrTrack.nominalFrameRate) : 30.0
+        let totalFrames = max(1, Int(fps * activeDuration + 0.5))
+
+        let outputBitrate = bitrate ?? max(500_000, Int(Double(scrBitrate) * 0.6))
+
+        // Solid mode: output IS the bezel canvas (1780×2550), iPad fills the frame
+        let dims = DimensionCalc(
+            bgEffW:       DimensionCalc.bezelW,
+            bgEffH:       DimensionCalc.bezelH,
+            outputWidth:  nil,
+            overlayScale: 1.0,
+            margin:       0,
+            xOverride:    nil,
+            yOverride:    nil
+        )
+
+        fputs("Screen:          \(Int(scrEffSize.width))x\(Int(scrEffSize.height)) — \(String(format: "%.1f", scrDuration))s @ \(scrBitrate)bps\n", stderr)
+        fputs("Background:      solid #\(hex)\n", stderr)
+        fputs("Active duration: \(String(format: "%.2f", activeDuration))s\n", stderr)
+        fputs("Output:          \(dims.outW)x\(dims.outH) → \(outputPath)\n", stderr)
+        fputs("GPU compositing starting...\n", stderr)
+
+        let sema = DispatchSemaphore(value: 0)
+        let compositor = Compositor(
+            bgURL:                 nil,
+            scrURL:                scrURL,
+            bezelURL:              bezelURL,
+            outputURL:             outputURL,
+            dims:                  dims,
+            bgStart:               0.0,
+            scrStart:              scrStart,
+            activeDuration:        activeDuration,
+            bgBitrate:             scrBitrate,
+            outputBitrate:         outputBitrate,
+            bgPreferredTransform:  nil,
+            scrPreferredTransform: scrTransform,
+            totalFrames:           totalFrames,
+            bgRotationOverride:    nil,
+            scrRotationOverride:   scrRotation,
+            bgColor:               bgCGColor
         )
         compositor.start(sema: sema)
         sema.wait()
@@ -209,10 +339,7 @@ struct CompositeBezelGPU: ParsableCommand {
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
-    /// Returns the effective (display) size of a video track after applying preferredTransform.
-    /// For 90° / 270° rotations the width and height are swapped.
     private func effectiveSize(naturalSize: CGSize, transform: CGAffineTransform) -> CGSize {
-        // Determine rotation angle from the transform
         let angle = atan2(transform.b, transform.a)
         let degrees = abs(angle * 180.0 / .pi)
         let isTransposed = (degrees > 45 && degrees < 135) || (degrees > 225 && degrees < 315)
