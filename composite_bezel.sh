@@ -180,12 +180,12 @@ if [ "$BG_IS_LANDSCAPE" = "false" ]; then
 fi
 
 # ── Probe screen recording ────────────────────────────────────────────────────
-read -r SCR_W SCR_H SCR_BITRATE SCR_ROTATION < <(python3 - "$SCR" <<'PYEOF'
+read -r SCR_W SCR_H SCR_BITRATE SCR_ROTATION SCR_R_FPS SCR_AVG_FPS < <(python3 - "$SCR" <<'PYEOF'
 import sys, json, subprocess
 
 result = subprocess.run(
     ["ffprobe", "-v", "error", "-select_streams", "v:0",
-     "-show_entries", "stream=width,height,bit_rate:stream_side_data=rotation",
+     "-show_entries", "stream=width,height,bit_rate,r_frame_rate,avg_frame_rate:stream_side_data=rotation",
      "-print_format", "json", sys.argv[1]],
     capture_output=True, text=True
 )
@@ -198,7 +198,9 @@ for sd in d.get("side_data_list", []):
     if "rotation" in sd:
         rotation = int(sd["rotation"])
         break
-print(w, h, bitrate, rotation)
+r_fps   = d.get("r_frame_rate",   "0/0")
+avg_fps = d.get("avg_frame_rate", "0/0")
+print(w, h, bitrate, rotation, r_fps, avg_fps)
 PYEOF
 )
 
@@ -262,6 +264,7 @@ OUTPUT_BITRATE=$(python3 -c "print(int(float('$BG_BITRATE') * 0.75))")
 
 # ── Durations ─────────────────────────────────────────────────────────────────
 BG_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BG" 2>/dev/null)
+# Must probe original $SCR here, before any VFR reassignment below.
 SCR_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$SCR" 2>/dev/null)
 
 # Active duration = min of remaining clip lengths after applying start offsets
@@ -298,7 +301,38 @@ echo ""
 _TMP=$(mktemp /tmp/composite_gpu_XXXXXX)
 TEMP_VIDEO="${_TMP}.mp4"
 mv "$_TMP" "$TEMP_VIDEO"
-trap 'rm -f "$TEMP_VIDEO"' EXIT
+SCR_CFR_TMP=""
+ORIG_SCR=""
+cleanup() {
+    rm -f "$TEMP_VIDEO"
+    [ -n "$SCR_CFR_TMP" ] && rm -f "$SCR_CFR_TMP"
+}
+trap cleanup EXIT
+
+# ── VFR detection ─────────────────────────────────────────────────────────────
+IS_VFR=$(python3 -c "
+import fractions
+try:
+    r = float(fractions.Fraction('$SCR_R_FPS'))
+    a = float(fractions.Fraction('$SCR_AVG_FPS'))
+    print('true' if r > 0 and a > 0 and abs(r - a) / r > 0.05 else 'false')
+except Exception:
+    print('false')
+")
+
+if [ "$IS_VFR" = "true" ]; then
+    echo "Warning: screen recording is VFR (declared ${SCR_R_FPS} fps, actual avg ${SCR_AVG_FPS} fps). Converting to CFR before compositing..." >&2
+    ORIG_SCR="$SCR"
+    _SCR_CFR=$(mktemp /tmp/scr_cfr_XXXXXX)
+    SCR_CFR_TMP="${_SCR_CFR}.mp4"
+    mv "$_SCR_CFR" "$SCR_CFR_TMP"
+    # -c:a copy preserves full audio from t=0; audio mux applies atrim via ORIG_SCR.
+    # Do not add -ss or trim flags here.
+    ffmpeg -i "$SCR" -vf "fps=${SCR_R_FPS}" -c:v h264_videotoolbox -q:v 65 -c:a copy \
+        -y "$SCR_CFR_TMP" >/dev/null 2>&1 \
+        || { echo "Error: CFR conversion failed" >&2; exit 1; }
+    SCR="$SCR_CFR_TMP"
+fi
 
 # Compute audio atrim endpoints (both start AND end required to prevent audio > video)
 BG_END_TIME=$(python3 -c "print(float('$BG_START') + float('$ACTIVE_DURATION'))")
@@ -349,7 +383,7 @@ case "$AUDIO_MODE" in
         echo "Error: --audio must be one of: both, bg, screen, none" >&2; exit 1 ;;
 esac
 
-ffmpeg -i "$TEMP_VIDEO" -i "$BG" -i "$SCR" \
+ffmpeg -i "$TEMP_VIDEO" -i "$BG" -i "${ORIG_SCR:-$SCR}" \
     -map 0:v "${AUDIO_MUXARGS[@]}" \
     -c:v copy -tag:v hvc1 \
     -y "$OUTPUT" 2>&1
