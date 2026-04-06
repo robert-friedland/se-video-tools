@@ -88,7 +88,15 @@ sync_clap background.mp4 screen_recording.mp4
 
 ## Updating
 
-Each tool has a built-in `update` subcommand that pulls the latest version from GitHub:
+Run a single command to update all tools to the latest version:
+
+```bash
+se-video-tools update
+```
+
+This updates `ipad_bezel`, `composite_bezel`, `sync_clap`, and the `se-video-tools` dispatcher itself.
+
+Or update individual tools:
 
 ```bash
 ipad_bezel update
@@ -98,4 +106,4 @@ sync_clap update
 
 ## Claude Code skills
 
-If [Claude Code](https://claude.ai/code) is installed, the installer also adds `/ipad-bezel`, `/composite-bezel`, and `/sync-clap` skills so Claude can drive the tools directly from a chat prompt.
+If [Claude Code](https://claude.ai/code) is installed, the installer also adds `/ipad-bezel`, `/composite-bezel`, `/sync-clap`, and `/se-video-tools` skills so Claude can drive the tools directly from a chat prompt.

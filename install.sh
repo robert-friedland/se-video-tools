@@ -67,6 +67,13 @@ chmod +x "$INSTALL_DIR/sync_clap.sh"
 ln -sf "$INSTALL_DIR/sync_clap.sh" "$BREW_BIN/sync_clap"
 echo "✓ sync_clap installed → $BREW_BIN/sync_clap"
 
+# Download update.sh (top-level update dispatcher)
+echo "Downloading se-video-tools (update dispatcher)..."
+curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
+chmod +x "$INSTALL_DIR/update.sh"
+ln -sf "$INSTALL_DIR/update.sh" "$BREW_BIN/se-video-tools"
+echo "✓ se-video-tools installed → $BREW_BIN/se-video-tools"
+
 # Install Claude Code skills if Claude is present
 if [ -d "$HOME/.claude" ]; then
     mkdir -p "$SKILL_DIR"
@@ -79,6 +86,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-clap.md" \
         -o "$SKILL_DIR/sync-clap.md"
     echo "✓ Claude /sync-clap skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
+        -o "$SKILL_DIR/se-video-tools.md"
+    echo "✓ Claude /se-video-tools skill installed"
 else
     echo "  Claude Code not detected — skipping skill install"
 fi
@@ -88,6 +98,5 @@ echo "All done! Usage:"
 echo "  ipad_bezel <input.mp4>                          # add bezel overlay"
 echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over background"
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
-echo "  ipad_bezel update / composite_bezel update      # pull latest versions"
-echo "  sync_clap update                                 # pull latest sync_clap"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  (Claude Code)   # let Claude drive it"
+echo "  se-video-tools update                           # update all tools at once"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /se-video-tools  (Claude Code)"
