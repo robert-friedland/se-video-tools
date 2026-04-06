@@ -32,6 +32,9 @@ Optional flags:
 **Audio:**
 - `--audio both|bg|screen|none` — which audio to include in the output (default `both`). `both` mixes background + screen audio at equal levels; `bg` and `screen` use a single source; `none` strips audio entirely.
 
+**Performance:**
+- `--jobs N` — number of parallel render chunks (default: half of logical CPUs). Set higher (e.g., `--jobs 10`) for maximum speed, or lower (e.g., `--jobs 2`) to keep the machine responsive while rendering.
+
 ## Key facts
 
 - The screen recording must be a portrait iPad mini recording. Aspect ratio is validated automatically.

@@ -16,6 +16,8 @@
 #   --duration N          render N seconds of output (default: min of remaining clip lengths)
 #   --test-seconds N      alias for --duration
 #   --audio both|bg|screen|none  which audio to include (default: both)
+#   --jobs N              parallel render chunks (default: all logical CPUs)
+#   --output-width N      scale output to this width, e.g. 1920 for 1080p (default: native)
 
 set -e
 
@@ -51,6 +53,8 @@ BG_START=0
 SCR_START=0
 DURATION_OVERRIDE=""
 AUDIO_MODE="both"  # both | bg | screen | none
+JOBS_OVERRIDE=""
+OUTPUT_WIDTH=""
 
 # Parse args — flags may appear anywhere (before or after positionals)
 POSITIONALS=()
@@ -64,6 +68,8 @@ while [ $# -gt 0 ]; do
         --scr-start)     SCR_START="$2";     shift 2 ;;
         --duration|--test-seconds) DURATION_OVERRIDE="$2"; shift 2 ;;
         --audio)         AUDIO_MODE="$2";    shift 2 ;;
+        --jobs)          JOBS_OVERRIDE="$2";    shift 2 ;;
+        --output-width)  OUTPUT_WIDTH="$2";    shift 2 ;;
         --*)
             echo "Unknown option: $1"
             echo "Usage: $0 [--overlay-scale 0.7] [--x N] [--y N] [--margin 40] [--bg-start N] [--scr-start N] [--duration N] background.mp4 screen.mp4 [output.mp4]"
@@ -202,26 +208,35 @@ fi
 
 # ── Calculate dimensions ──────────────────────────────────────────────────────
 
+# Output resolution: scale background if --output-width is set (even integers)
+if [ -n "$OUTPUT_WIDTH" ]; then
+    OUT_W=$(python3 -c "print(round(int('$OUTPUT_WIDTH') / 2) * 2)")
+    OUT_H=$(python3 -c "print(round(int('$OUTPUT_WIDTH') * $BG_EFF_H / $BG_EFF_W / 2) * 2)")
+else
+    OUT_W=$BG_EFF_W
+    OUT_H=$BG_EFF_H
+fi
+
 # Screen area within bezel canvas (89% of bezel, even integers)
 SCREEN_W=$(python3 -c "print(round($BEZEL_W * $SCALE / 2) * 2)")
 SCREEN_H=$(python3 -c "print(round($BEZEL_H * $SCALE / 2) * 2)")
 X_OFF=$(( (BEZEL_W - SCREEN_W) / 2 ))
 Y_OFF=$(( (BEZEL_H - SCREEN_H) / 2 ))
 
-# Overlay dimensions (scaled bezel, even integers)
-OVL_H=$(python3 -c "print(round($BG_EFF_H * $OVERLAY_SCALE / 2) * 2)")
+# Overlay dimensions (scaled bezel, even integers) — based on output height
+OVL_H=$(python3 -c "print(round($OUT_H * $OVERLAY_SCALE / 2) * 2)")
 OVL_W=$(python3 -c "print(round($OVL_H * $BEZEL_W / $BEZEL_H / 2) * 2)")
 
 # Position: use explicit --x/--y if provided, otherwise default (right side, vertically centered)
 if [ -n "$OVL_X_OVERRIDE" ]; then
     OVL_X="$OVL_X_OVERRIDE"
 else
-    OVL_X=$(( BG_EFF_W - OVL_W - MARGIN ))
+    OVL_X=$(( OUT_W - OVL_W - MARGIN ))
 fi
 if [ -n "$OVL_Y_OVERRIDE" ]; then
     OVL_Y="$OVL_Y_OVERRIDE"
 else
-    OVL_Y=$(( (BG_EFF_H - OVL_H) / 2 ))
+    OVL_Y=$(( (OUT_H - OVL_H) / 2 ))
 fi
 
 # Output bitrate: 75% of background (higher than ipad_bezel.sh's 60% — two motion sources)
@@ -242,6 +257,25 @@ if [ -n "$DURATION_OVERRIDE" ]; then
     ACTIVE_DURATION="$DURATION_OVERRIDE"
 fi
 
+# ── Jobs (computed here so summary echo below shows correct values) ────────────
+LOGICAL_CPUS=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+if [ -n "$JOBS_OVERRIDE" ]; then
+    N_JOBS="$JOBS_OVERRIDE"
+else
+    N_JOBS=$LOGICAL_CPUS
+fi
+N_JOBS=$(python3 -c "print(max(1, min($N_JOBS, int(float('$ACTIVE_DURATION')))))")
+CHUNK_DUR=$(python3 -c "print(float('$ACTIVE_DURATION') / $N_JOBS)")
+
+# ── FPS + total frame count (for progress bar) ────────────────────────────────
+BG_FPS_RAW=$(ffprobe -v error -select_streams v:0 \
+    -show_entries stream=r_frame_rate -of csv=p=0 "$BG" 2>/dev/null)
+TOTAL_FRAMES=$(python3 -c "
+from fractions import Fraction
+fps = float(Fraction('$BG_FPS_RAW'.rstrip(',')))
+print(max(1, int(fps * float('$ACTIVE_DURATION') + 0.5)))
+")
+
 # ── Audio detection ───────────────────────────────────────────────────────────
 BG_HAS_AUDIO=$(ffprobe -v error -select_streams a:0 \
     -show_entries stream=codec_type -of csv=p=0 "$BG" 2>/dev/null)
@@ -256,13 +290,12 @@ echo "Active duration: ${ACTIVE_DURATION}s$([ -n "$DURATION_OVERRIDE" ] && echo 
 echo "Bezel canvas:    ${BEZEL_W}x${BEZEL_H} → screen area ${SCREEN_W}x${SCREEN_H} at offset ${X_OFF},${Y_OFF}"
 echo "Overlay size:    ${OVL_W}x${OVL_H} at position ${OVL_X},${OVL_Y} (scale=${OVERLAY_SCALE})"
 echo "Output bitrate:  ${OUTPUT_BITRATE}bps"
+echo "Output size:     ${OUT_W}x${OUT_H}$([ -n "$OUTPUT_WIDTH" ] && echo " (--output-width; native ${BG_EFF_W}x${BG_EFF_H})" || echo " (native)")"
+echo "Parallel jobs:   ${N_JOBS} (of ${LOGICAL_CPUS} logical CPUs; use --jobs N to override)"
 echo "Output:          $OUTPUT"
 echo ""
 
 # ── Parallel chunk processing ─────────────────────────────────────────────────
-N_JOBS=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
-N_JOBS=$(python3 -c "print(max(1, min($N_JOBS, int(float('$ACTIVE_DURATION')))))")
-CHUNK_DUR=$(python3 -c "print(float('$ACTIVE_DURATION') / $N_JOBS)")
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
@@ -284,8 +317,10 @@ for i in $(seq 0 $((N_JOBS - 1))); do
 
     # Video filter: single-pass composite with transparency
     # Critical chain: format=rgba before transparent pad → format=auto on both overlays
+    BG_SCALE_FILTER=""
+    [ -n "$OUTPUT_WIDTH" ] && BG_SCALE_FILTER=",scale=${OUT_W}:${OUT_H}"
     VIDEO_FILTER="\
-[0:v]trim=${BG_START_I}:${BG_END_I},setpts=PTS-STARTPTS[bg];\
+[0:v]trim=${BG_START_I}:${BG_END_I},setpts=PTS-STARTPTS${BG_SCALE_FILTER}[bg];\
 [1:v]trim=${SCR_START_I}:${SCR_END_I},setpts=PTS-STARTPTS,\
 scale=${SCREEN_W}:${SCREEN_H}:force_original_aspect_ratio=decrease,\
 pad=${SCREEN_W}:${SCREEN_H}:(ow-iw)/2:(oh-ih)/2:black,\
@@ -337,6 +372,7 @@ format=rgba[footage];\
     esac
 
     ffmpeg \
+        -progress "$WORK_DIR/progress_${i}.txt" \
         -i "$BG" -i "$SCR" -i "$BEZEL" \
         -filter_complex "$FILTER" \
         -map "[out]" "${AUDIO_ARGS[@]}" \
@@ -346,17 +382,84 @@ format=rgba[footage];\
     PIDS+=($!)
 done
 
+# ── Progress bar ──────────────────────────────────────────────────────────────
+START_SECS=$(date +%s)
+declare -a CHUNK_DONE
+for i in $(seq 0 $((N_JOBS - 1))); do CHUNK_DONE[$i]=0; done
+DONE_COUNT=0
 FAILED=false
-for i in "${!PIDS[@]}"; do
-    if wait "${PIDS[$i]}"; then
-        echo "  Chunk $((i+1))/${N_JOBS} done"
-    else
-        echo "  Chunk $((i+1))/${N_JOBS} FAILED — see $WORK_DIR/chunk_${i}.log"
-        FAILED=true
-    fi
+
+while [ $DONE_COUNT -lt $N_JOBS ]; do
+    sleep 0.3
+    DONE_COUNT=0
+
+    for i in "${!PIDS[@]}"; do
+        if [ "${CHUNK_DONE[$i]}" = "1" ]; then
+            DONE_COUNT=$((DONE_COUNT + 1)); continue
+        fi
+        PROG="$WORK_DIR/progress_${i}.txt"
+        if [ -f "$PROG" ] && grep -q '^progress=end$' "$PROG" 2>/dev/null; then
+            CHUNK_DONE[$i]=1; DONE_COUNT=$((DONE_COUNT + 1))
+            if ! wait "${PIDS[$i]}" 2>/dev/null; then FAILED=true; fi
+        elif ! kill -0 "${PIDS[$i]}" 2>/dev/null; then
+            CHUNK_DONE[$i]=1; DONE_COUNT=$((DONE_COUNT + 1))
+            if ! wait "${PIDS[$i]}"; then FAILED=true; fi
+        fi
+    done
+
+    BAR_LINE=$(python3 - "$WORK_DIR" "$N_JOBS" "$TOTAL_FRAMES" \
+                         "$(($(date +%s) - START_SECS))" "$DONE_COUNT" <<'PYEOF'
+import sys
+work_dir, n_jobs, total_frames = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+elapsed, done_chunks = int(sys.argv[4]), int(sys.argv[5])
+
+total_done, speed_vals = 0, []
+for i in range(n_jobs):
+    try:
+        lines = open(f"{work_dir}/progress_{i}.txt").read().splitlines()
+        frames = [int(l.split('=',1)[1]) for l in lines if l.startswith('frame=')]
+        if frames: total_done += frames[-1]
+        for l in lines:
+            if l.startswith('speed='):
+                try: speed_vals.append(float(l.split('=',1)[1].strip().rstrip('x')))
+                except: pass
+    except: pass
+
+# Force 100% when all chunks complete (avoids stalling at 99% due to rounding)
+if done_chunks == n_jobs:
+    pct = 100
+else:
+    pct = min(99, int(total_done * 100 / total_frames)) if total_frames else 0
+
+W = 26
+bar = '█' * int(W * pct / 100) + '░' * (W - int(W * pct / 100))
+def fmt_duration(s):
+    s = int(s)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:   return f"{h}h {m:02d}m {sec:02d}s"
+    elif m: return f"{m}m {sec:02d}s"
+    else:   return f"{sec}s"
+
+speed = f"  {sum(speed_vals)/len(speed_vals):.1f}x" if speed_vals else ""
+eta_secs = int(elapsed*(100-pct)/pct) if pct >= 3 and pct < 100 and elapsed > 0 else None
+eta   = f"  eta ~{fmt_duration(eta_secs)}" if eta_secs is not None else ""
+elapsed_str = fmt_duration(elapsed)
+print(f"  [{bar}] {pct:3d}%  {elapsed_str} elapsed{eta}{speed}", end='')
+PYEOF
+    )
+    printf "\r%s\033[K" "$BAR_LINE"
 done
 
-$FAILED && exit 1
+printf "\n"
+if $FAILED; then
+    echo "One or more chunks failed. Check logs in: $WORK_DIR"
+    for i in "${!CHUNK_DONE[@]}"; do
+        log="$WORK_DIR/chunk_${i}.log"
+        [ -f "$log" ] && echo "  chunk $i: $log"
+    done
+    exit 1
+fi
 
 # ── Merge chunks ──────────────────────────────────────────────────────────────
 echo ""
