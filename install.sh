@@ -31,8 +31,10 @@ mkdir -p "$INSTALL_DIR"
 # Download script and bezel asset
 echo "Downloading ipad_bezel..."
 curl -fsSL "${GITHUB_RAW_BASE}/ipad_bezel.sh" -o "$INSTALL_DIR/ipad_bezel.sh"
-curl -fsSL "${GITHUB_RAW_BASE}/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
-    -o "$INSTALL_DIR/iPad mini - Starlight - Portrait.png"
+mkdir -p "$INSTALL_DIR/assets"
+curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
+    -o "$INSTALL_DIR/assets/iPad mini - Starlight - Portrait.png"
+rm -f "$INSTALL_DIR/iPad mini - Starlight - Portrait.png"
 chmod +x "$INSTALL_DIR/ipad_bezel.sh"
 
 # Symlink into Homebrew's bin so it's on PATH without any shell config changes
@@ -40,7 +42,7 @@ BREW_BIN="$(brew --prefix)/bin"
 ln -sf "$INSTALL_DIR/ipad_bezel.sh" "$BREW_BIN/ipad_bezel"
 echo "✓ ipad_bezel installed → $BREW_BIN/ipad_bezel"
 
-# Download composite_bezel script (shares the bezel PNG already downloaded above)
+# Download composite_bezel script (shares the bezel PNG in assets/ downloaded above)
 echo "Downloading composite_bezel..."
 curl -fsSL "${GITHUB_RAW_BASE}/composite_bezel.sh" -o "$INSTALL_DIR/composite_bezel.sh"
 chmod +x "$INSTALL_DIR/composite_bezel.sh"

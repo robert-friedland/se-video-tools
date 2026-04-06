@@ -23,7 +23,7 @@ set -e
 
 # Resolve real script location through symlinks (BASH_SOURCE[0] may be a symlink in homebrew/bin)
 SCRIPT_DIR="$(cd "$(dirname "$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")")" && pwd)"
-BEZEL="$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
+BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
 
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/robert-friedland/se-video-tools/main"
 
@@ -33,8 +33,10 @@ if [ "$1" = "update" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/composite_bezel.sh" -o "$SCRIPT_DIR/composite_bezel.sh.tmp" \
         && mv "$SCRIPT_DIR/composite_bezel.sh.tmp" "$SCRIPT_DIR/composite_bezel.sh" \
         && chmod +x "$SCRIPT_DIR/composite_bezel.sh"
-    curl -fsSL "${GITHUB_RAW_BASE}/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
-        -o "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
+    mkdir -p "$SCRIPT_DIR/assets"
+    curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
+        -o "$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
+    rm -f "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
     if [ -d "$HOME/.claude/commands" ]; then
         curl -fsSL "${GITHUB_RAW_BASE}/commands/composite-bezel.md" \
             -o "$HOME/.claude/commands/composite-bezel.md"
