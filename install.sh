@@ -40,18 +40,29 @@ BREW_BIN="$(brew --prefix)/bin"
 ln -sf "$INSTALL_DIR/ipad_bezel.sh" "$BREW_BIN/ipad_bezel"
 echo "✓ ipad_bezel installed → $BREW_BIN/ipad_bezel"
 
-# Install Claude Code skill if Claude is present
+# Download composite_bezel script (shares the bezel PNG already downloaded above)
+echo "Downloading composite_bezel..."
+curl -fsSL "${GITHUB_RAW_BASE}/composite_bezel.sh" -o "$INSTALL_DIR/composite_bezel.sh"
+chmod +x "$INSTALL_DIR/composite_bezel.sh"
+ln -sf "$INSTALL_DIR/composite_bezel.sh" "$BREW_BIN/composite_bezel"
+echo "✓ composite_bezel installed → $BREW_BIN/composite_bezel"
+
+# Install Claude Code skills if Claude is present
 if [ -d "$HOME/.claude" ]; then
     mkdir -p "$SKILL_DIR"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/ipad-bezel.md" \
         -o "$SKILL_DIR/ipad-bezel.md"
     echo "✓ Claude /ipad-bezel skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/composite-bezel.md" \
+        -o "$SKILL_DIR/composite-bezel.md"
+    echo "✓ Claude /composite-bezel skill installed"
 else
     echo "  Claude Code not detected — skipping skill install"
 fi
 
 echo ""
 echo "All done! Usage:"
-echo "  ipad_bezel <input.mp4>              # add bezel"
-echo "  ipad_bezel update                   # pull latest version"
-echo "  /ipad-bezel  (in Claude Code)       # let Claude drive it"
+echo "  ipad_bezel <input.mp4>                         # add bezel overlay"
+echo "  composite_bezel <bg.mp4> <screen.mp4>          # composite bezel over background"
+echo "  ipad_bezel update / composite_bezel update     # pull latest versions"
+echo "  /ipad-bezel  /composite-bezel  (Claude Code)   # let Claude drive it"
