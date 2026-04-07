@@ -31,7 +31,9 @@ if [ "$1" = "update" ]; then
     echo "Updating composite_bezel..."
     curl -fsSL "${GITHUB_RAW_BASE}/composite_bezel.sh" -o "$SCRIPT_DIR/composite_bezel.sh.tmp" \
         && mv "$SCRIPT_DIR/composite_bezel.sh.tmp" "$SCRIPT_DIR/composite_bezel.sh" \
-        && chmod +x "$SCRIPT_DIR/composite_bezel.sh"
+        && chmod +x "$SCRIPT_DIR/composite_bezel.sh" \
+        && cp "$SCRIPT_DIR/composite_bezel.sh" "$SCRIPT_DIR/composite_bezel" \
+        && chmod +x "$SCRIPT_DIR/composite_bezel"
     mkdir -p "$SCRIPT_DIR/assets"
     curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
         -o "$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
