@@ -46,7 +46,7 @@ if [ "$1" = "update" ]; then
     if curl -fL "$BINARY_URL" -o "$_BIN_TMP" 2>/dev/null && [ -s "$_BIN_TMP" ]; then
         mv "$_BIN_TMP" "$SCRIPT_DIR/composite_bezel_gpu"
         chmod +x "$SCRIPT_DIR/composite_bezel_gpu"
-        codesign -s - "$SCRIPT_DIR/composite_bezel_gpu"
+        codesign -f -s - "$SCRIPT_DIR/composite_bezel_gpu"
         xattr -d com.apple.quarantine "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null || true
         echo "composite_bezel_gpu updated."
     else
