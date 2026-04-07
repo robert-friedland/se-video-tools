@@ -30,19 +30,21 @@ ffprobe -v error -show_entries format=duration -of csv=p=0 "SCR_VIDEO"
 
 ## Phase 2 — Coarse sweep (5–10 s intervals)
 
-Extract one frame every 5–10 seconds from each video to get an overview. Use fast seek (put `-ss` **before** `-i`) for speed — accuracy is not critical at this stage.
+Extract 16 evenly-distributed frames from each video across the first 2 minutes (or the full clip if shorter). Use fast seek — accuracy is not critical at this stage.
+
+First get both durations, then clamp to 120 s:
 
 ```bash
-# Background — one frame every 8 seconds, first 2 minutes
-for T in $(seq 0 8 120); do
-  ffmpeg -ss $T -i "BG_VIDEO" -frames:v 1 -vf "scale=400:-1" -q:v 2 "$WORK/bg_$(printf '%04d' $T).jpg" -y 2>/dev/null
-done
+BG_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "BG_VIDEO" | tr -d '[:space:]')
+SCR_DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "SCR_VIDEO" | tr -d '[:space:]')
+BG_COARSE_STOP=$(echo "if ($BG_DUR < 120) $BG_DUR else 120" | bc -l)
+SCR_COARSE_STOP=$(echo "if ($SCR_DUR < 120) $SCR_DUR else 120" | bc -l)
 
-# Screen recording — same interval
-for T in $(seq 0 8 120); do
-  ffmpeg -ss $T -i "SCR_VIDEO" -frames:v 1 -vf "scale=400:-1" -q:v 2 "$WORK/scr_$(printf '%04d' $T).jpg" -y 2>/dev/null
-done
+extract_frames "BG_VIDEO"  16 "$WORK" --start 0 --stop "$BG_COARSE_STOP"  --scale 400 --prefix bg_coarse
+extract_frames "SCR_VIDEO" 16 "$WORK" --start 0 --stop "$SCR_COARSE_STOP" --scale 400 --prefix scr_coarse
 ```
+
+With 16 frames over 120 s the half-step formula places the first frame at ~3.75 s (avoids the common black-frame at T=0) and spaces frames ~7.5 s apart.
 
 Read and examine the frames (use the Read tool on each `.jpg`). Look for:
 - An app tap that changes the screen (button press, page transition, modal opening)
@@ -80,18 +82,15 @@ Read the cropped frame. Adjust crop coordinates and repeat until the tablet scre
 
 ## Phase 4 — Medium sweep (1 s intervals)
 
-Once you have a ±5 s window around the event in each video, extract frames at 1-second intervals with **accurate seek** (put `-i` before `-ss`) to ensure frame-accurate positioning:
+Once you have a ±5 s window around the event in each video, extract 10 evenly-distributed frames from that window using **accurate seek** to ensure frame-accurate positioning:
 
 ```bash
 # Replace BG_LO / BG_HI with your coarse window for the background
-for T in $(seq BG_LO 1 BG_HI); do
-  ffmpeg -i "BG_VIDEO" -ss $T -frames:v 1 -vf "crop=W:H:X:Y,scale=400:-1" -q:v 2 "$WORK/bg_med_$(printf '%04d' $T).jpg" -y 2>/dev/null
-done
+# Replace W H X Y with your crop box (from Phase 3)
+extract_frames "BG_VIDEO"  10 "$WORK" --start BG_LO --stop BG_HI --scale 400 --accurate --crop W:H:X:Y --prefix bg_med
 
 # Replace SCR_LO / SCR_HI with your coarse window for the screen recording
-for T in $(seq SCR_LO 1 SCR_HI); do
-  ffmpeg -i "SCR_VIDEO" -ss $T -frames:v 1 -vf "scale=400:-1" -q:v 2 "$WORK/scr_med_$(printf '%04d' $T).jpg" -y 2>/dev/null
-done
+extract_frames "SCR_VIDEO" 10 "$WORK" --start SCR_LO --stop SCR_HI --scale 400 --accurate --prefix scr_med
 ```
 
 Read each frame in sequence. Narrow down to the 1-second bracket where the event occurs in each video (e.g. "event happens between t=42 and t=43 in the background, between t=17 and t=18 in the screen recording").
@@ -100,21 +99,20 @@ Read each frame in sequence. Narrow down to the 1-second bracket where the event
 
 ## Phase 5 — Fine sweep (0.2–0.3 s intervals)
 
-Within the 1-second bracket for each clip, extract frames at 0.2 or 0.3 second intervals. Use accurate seek (put `-i` before `-ss`):
+Within the 1-second bracket for each clip, extract 6 frames over a 1.2 s window using accurate seek. Extending to 1.2 s ensures the half-step distribution covers the full bracket including the boundary.
+
+Pre-evaluate stop times before passing to the script (the script accepts numeric values only):
 
 ```bash
-# Replace BG_SEC with the integer second of the event in the background
-for T in 0.0 0.2 0.4 0.6 0.8 1.0; do
-  SEC=$(echo "BG_SEC + $T" | bc)
-  ffmpeg -i "BG_VIDEO" -ss $SEC -frames:v 1 -vf "crop=W:H:X:Y,scale=400:-1" -q:v 2 "$WORK/bg_fine_${SEC}.jpg" -y 2>/dev/null
-done
+# Replace BG_SEC / SCR_SEC with the integer seconds identified in Phase 4
+BG_FINE_STOP=$(echo "BG_SEC + 1.2" | bc)
+SCR_FINE_STOP=$(echo "SCR_SEC + 1.2" | bc)
 
-# Replace SCR_SEC with the integer second of the event in the screen recording
-for T in 0.0 0.2 0.4 0.6 0.8 1.0; do
-  SEC=$(echo "SCR_SEC + $T" | bc)
-  ffmpeg -i "SCR_VIDEO" -ss $SEC -frames:v 1 -vf "scale=400:-1" -q:v 2 "$WORK/scr_fine_${SEC}.jpg" -y 2>/dev/null
-done
+extract_frames "BG_VIDEO"  6 "$WORK" --start BG_SEC --stop "$BG_FINE_STOP"  --scale 400 --accurate --crop W:H:X:Y --prefix bg_fine
+extract_frames "SCR_VIDEO" 6 "$WORK" --start SCR_SEC --stop "$SCR_FINE_STOP" --scale 400 --accurate --prefix scr_fine
 ```
+
+With 6 frames over a 1.2 s window the half-step formula produces timestamps at +0.1, +0.3, +0.5, +0.7, +0.9, +1.1 s — covering the full 1-second bracket and its boundary.
 
 Read each frame. Pick the frame in each clip where the event **first becomes visible** (e.g. the first frame where the new screen state appears). Record:
 - `BG_EVENT` = timestamp in background where the event is first visible (e.g. `42.4`)
@@ -156,13 +154,14 @@ If yes, run `composite_bezel` with the computed `--bg-start` and `--scr-start` v
 ## Key technical notes
 
 **Fast seek vs. accurate seek:**
-- Fast seek (`-ss T -i VIDEO`): use for coarse sweeps. May land on a nearby keyframe; can be off by several seconds. Fast but imprecise.
-- Accurate seek (`-i VIDEO -ss T`): use for medium and fine sweeps. Decodes from the previous keyframe; always lands on the exact frame. Slower but precise.
+- Fast seek (default): use for coarse sweeps. May land on a nearby keyframe; can be off by several seconds. Fast but imprecise.
+- Accurate seek (`--accurate` flag): use for medium and fine sweeps. Decodes from the previous keyframe; always lands on the exact frame. Slower but precise.
 
-**Frame extraction template (accurate seek):**
+**`extract_frames` usage:**
 ```bash
-ffmpeg -i "VIDEO" -ss T -frames:v 1 -vf "scale=400:-1" -q:v 2 "OUTPUT.jpg" -y 2>/dev/null
+extract_frames VIDEO N OUTPUT_DIR [--start S] [--stop S] [--scale PX] [--accurate] [--crop W:H:X:Y] [--prefix NAME]
 ```
+Frames are named `{prefix}_{seq}_{timestamp}s.jpg`. Timestamps in filenames are the actual seek positions (one decimal place).
 
 **Crop syntax:** `crop=W:H:X:Y` where W/H are the crop dimensions and X/Y are the top-left corner, all in source-resolution pixels. For 4K source (3840×2160), estimate from a 1920-wide preview by doubling.
 

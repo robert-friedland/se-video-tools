@@ -31,7 +31,9 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
             -o "$HOME/.claude/commands/se-video-tools.md" || true
         curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-visual.md" \
             -o "$HOME/.claude/commands/sync-visual.md" || true
-        echo "Claude skill updated."
+        curl -fsSL "${GITHUB_RAW_BASE}/commands/analyze-video.md" \
+            -o "$HOME/.claude/commands/analyze-video.md" || true
+        echo "Claude skills updated."
     fi
     # Re-exec new version to pick up any changes; _SE_UPDATED prevents infinite loop
     exec env _SE_UPDATED=1 "$SCRIPT_DIR/update.sh" update
@@ -47,6 +49,14 @@ if [ "$1" = "update" ]; then
 
     echo "Updating sync_clap..."
     "$SCRIPT_DIR/sync_clap.sh" update || { echo "sync_clap update failed"; exit 1; }
+
+    echo "Updating extract_frames..."
+    curl -fsSL "${GITHUB_RAW_BASE}/extract_frames.sh" -o "$SCRIPT_DIR/extract_frames.sh.tmp"
+    [ -s "$SCRIPT_DIR/extract_frames.sh.tmp" ] || { echo "extract_frames download failed or empty"; rm -f "$SCRIPT_DIR/extract_frames.sh.tmp"; exit 1; }
+    grep -q '^#!/bin/bash' "$SCRIPT_DIR/extract_frames.sh.tmp" || { echo "extract_frames download corrupt"; rm -f "$SCRIPT_DIR/extract_frames.sh.tmp"; exit 1; }
+    chmod +x "$SCRIPT_DIR/extract_frames.sh.tmp"
+    mv "$SCRIPT_DIR/extract_frames.sh.tmp" "$SCRIPT_DIR/extract_frames.sh"
+    echo "✓ extract_frames updated"
 
     echo "All tools updated."
     exit 0

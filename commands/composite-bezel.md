@@ -8,7 +8,18 @@ Composite a screen recording (with iPad mini bezel, floating transparently) over
 4. Ask about `--audio` only if the user mentions audio preferences (e.g. "only use the screen audio", "mute the background").
 5. Use `--x`/`--y` only if the user requests a specific overlay position; otherwise the default (right side, vertically centered) is fine.
 6. Run the command via Bash and wait for it to finish.
-7. Report the output path, file size, and duration.
+7. **Portrait → landscape correction (default on):** After compositing, check if the output is portrait (height > width). If so, automatically rotate it to landscape with a ffmpeg re-encode pass — no need to ask the user first:
+   ```bash
+   OUT_W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "OUTPUT")
+   OUT_H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "OUTPUT")
+   ```
+   If `OUT_H > OUT_W`, run:
+   ```bash
+   ffmpeg -i "OUTPUT" -vf "transpose=2" -c:v hevc_videotoolbox -q:v 55 -tag:v hvc1 -c:a copy "OUTPUT.tmp.mp4" \
+     && mv "OUTPUT.tmp.mp4" "OUTPUT"
+   ```
+   `transpose=2` rotates 90° counter-clockwise (standard correction for iPhone portrait footage that should display as landscape). If the result looks upside-down, use `transpose=1` (90° CW) instead and rerun.
+8. Report the output path, file size, and duration (including final landscape dimensions).
 
 ## Command
 

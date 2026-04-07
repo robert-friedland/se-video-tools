@@ -73,6 +73,13 @@ chmod +x "$INSTALL_DIR/sync_clap.sh"
 ln -sf "$INSTALL_DIR/sync_clap.sh" "$BREW_BIN/sync_clap"
 echo "✓ sync_clap installed → $BREW_BIN/sync_clap"
 
+# Download extract_frames utility
+echo "Downloading extract_frames..."
+curl -fsSL "${GITHUB_RAW_BASE}/extract_frames.sh" -o "$INSTALL_DIR/extract_frames.sh"
+chmod +x "$INSTALL_DIR/extract_frames.sh"
+ln -sf "$INSTALL_DIR/extract_frames.sh" "$BREW_BIN/extract_frames"
+echo "✓ extract_frames installed → $BREW_BIN/extract_frames"
+
 # Download update.sh (top-level update dispatcher)
 echo "Downloading se-video-tools (update dispatcher)..."
 curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
@@ -95,6 +102,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-visual.md" \
         -o "$SKILL_DIR/sync-visual.md"
     echo "✓ Claude /sync-visual skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/analyze-video.md" \
+        -o "$SKILL_DIR/analyze-video.md"
+    echo "✓ Claude /analyze-video skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -107,5 +117,6 @@ echo "All done! Usage:"
 echo "  ipad_bezel <input.mp4>                          # add bezel overlay"
 echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over background"
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
+echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /se-video-tools  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /se-video-tools  (Claude Code)"
