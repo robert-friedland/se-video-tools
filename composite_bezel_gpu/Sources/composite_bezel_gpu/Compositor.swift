@@ -95,7 +95,7 @@ final class Compositor: @unchecked Sendable {
             throw CompositorError.noMetalDevice
         }
         let ciCtx = CIContext(mtlDevice: metalDevice, options: [
-            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
             .outputPremultiplied: false,
             .cacheIntermediates: true,
         ])
@@ -103,7 +103,7 @@ final class Compositor: @unchecked Sendable {
         // ── Load bezel PNG (once) ──────────────────────────────────────────────
         guard let bezelCI = CIImage(
             contentsOf: bezelURL,
-            options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]
+            options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]
         ) else {
             throw CompositorError.bezelLoadFailed(bezelURL.path)
         }
@@ -269,7 +269,7 @@ final class Compositor: @unchecked Sendable {
                     result,
                     to: outBuf,
                     bounds: CGRect(x: 0, y: 0, width: d.outW, height: d.outH),
-                    colorSpace: nil
+                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
                 )
 
                 adaptor.append(outBuf, withPresentationTime: relScrPTS)
@@ -306,7 +306,7 @@ final class Compositor: @unchecked Sendable {
             throw CompositorError.noMetalDevice
         }
         let ciCtx = CIContext(mtlDevice: metalDevice, options: [
-            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
             .outputPremultiplied: false,
             .cacheIntermediates: true,
         ])
@@ -314,7 +314,7 @@ final class Compositor: @unchecked Sendable {
         // ── Load bezel PNG (once) ──────────────────────────────────────────────
         guard let bezelCI = CIImage(
             contentsOf: bezelURL,
-            options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]
+            options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]
         ) else {
             throw CompositorError.bezelLoadFailed(bezelURL.path)
         }
@@ -561,7 +561,7 @@ final class Compositor: @unchecked Sendable {
                     result,
                     to: outBuf,
                     bounds: CGRect(x: 0, y: 0, width: d.outW, height: d.outH),
-                    colorSpace: nil
+                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
                 )
 
                 adaptor.append(outBuf, withPresentationTime: relBgPTS)
