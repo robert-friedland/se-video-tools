@@ -323,11 +323,6 @@ final class Compositor: @unchecked Sendable {
         let bgAsset  = AVAsset(url: bgURL)
         let scrAsset = AVAsset(url: scrURL)
 
-        let decodeOpts: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String:
-                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-        ]
-
         let bgReader  = try AVAssetReader(asset: bgAsset)
         let scrReader = try AVAssetReader(asset: scrAsset)
 
@@ -337,8 +332,31 @@ final class Compositor: @unchecked Sendable {
             throw CompositorError.noVideoTrack
         }
 
-        let bgOut  = AVAssetReaderTrackOutput(track: bgTrack,  outputSettings: decodeOpts)
-        let scrOut = AVAssetReaderTrackOutput(track: scrTrack, outputSettings: decodeOpts)
+        // Detect HLG: iPhone/iPad cameras record in Dolby Vision HLG (BT.2020, arib-std-b67).
+        // 8-bit decode strips the HDR metadata, causing CIImage to misinterpret HLG values as
+        // Rec.709 gamma → output appears brighter. Decode HLG sources at native 10-bit and tag
+        // the CIImage explicitly so Core Image applies the correct HLG→sRGB tone mapping.
+        let bgIsHLG: Bool = {
+            guard let desc = bgTrack.formatDescriptions.first else { return false }
+            let exts = CMFormatDescriptionGetExtensions(desc as! CMFormatDescription) as? [String: Any]
+            let tf = exts?[kCMFormatDescriptionExtension_TransferFunction as String] as? String
+            return tf == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
+        }()
+
+        // For HLG: request BGRA so AVFoundation applies its full HLG→SDR tone mapping pipeline.
+        // For SDR: keep 8-bit YCbCr (lower bandwidth).
+        let bgPixelFormat: OSType = bgIsHLG
+            ? kCVPixelFormatType_32BGRA
+            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        let bgDecodeOpts: [String: Any]  = [kCVPixelBufferPixelFormatTypeKey as String: bgPixelFormat]
+        let scrDecodeOpts: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String:
+                                                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+
+        // BGRA output is already display-referred sRGB; for SDR source use sRGB too.
+        let bgCIColorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+
+        let bgOut  = AVAssetReaderTrackOutput(track: bgTrack,  outputSettings: bgDecodeOpts)
+        let scrOut = AVAssetReaderTrackOutput(track: scrTrack, outputSettings: scrDecodeOpts)
         bgOut.alwaysCopiesSampleData  = false
         scrOut.alwaysCopiesSampleData = false
 
@@ -470,8 +488,8 @@ final class Compositor: @unchecked Sendable {
                 let scrBuf = scrEntry.buf
 
                 // ── GPU composite ──────────────────────────────────────────────
-                var bgCI  = CIImage(cvPixelBuffer: bgBuf)
-                var scrCI = CIImage(cvPixelBuffer: scrBuf)
+                var bgCI  = CIImage(cvPixelBuffer: bgBuf,  options: [.colorSpace: bgCIColorSpace])
+                var scrCI = CIImage(cvPixelBuffer: scrBuf, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
 
                 if let deg = self.bgRotationOverride {
                     bgCI = self.applyExplicitRotation(bgCI, degrees: deg)
