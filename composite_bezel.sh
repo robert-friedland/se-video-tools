@@ -42,12 +42,21 @@ if [ "$1" = "update" ]; then
         echo "Claude skill updated."
     fi
     BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
-    curl -fL "$BINARY_URL" -o "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null && {
+    _BIN_TMP=$(mktemp /tmp/composite_bezel_gpu_XXXXXX)
+    if curl -fL "$BINARY_URL" -o "$_BIN_TMP" 2>/dev/null && [ -s "$_BIN_TMP" ]; then
+        mv "$_BIN_TMP" "$SCRIPT_DIR/composite_bezel_gpu"
         chmod +x "$SCRIPT_DIR/composite_bezel_gpu"
         codesign -s - "$SCRIPT_DIR/composite_bezel_gpu"
         xattr -d com.apple.quarantine "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null || true
         echo "composite_bezel_gpu updated."
-    } || echo "Warning: composite_bezel_gpu binary not available (Apple Silicon required)."
+    else
+        rm -f "$_BIN_TMP"
+        if [ -x "$SCRIPT_DIR/composite_bezel_gpu" ]; then
+            echo "Warning: composite_bezel_gpu download failed — keeping existing binary."
+        else
+            echo "Warning: composite_bezel_gpu download failed and no existing binary found. Build from source or attach a release binary."
+        fi
+    fi
     echo "Done."
     exit 0
 fi
