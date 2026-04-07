@@ -83,9 +83,11 @@ fi
 
 # Extract frames using half-step formula: T_i = start + (i + 0.5) * window / N
 for i in $(seq 0 $(( NUM_FRAMES - 1 ))); do
-    T=$(echo "$START + ($i + 0.5) * $WINDOW / $NUM_FRAMES" | bc -l)
+    T_RAW=$(echo "$START + ($i + 0.5) * $WINDOW / $NUM_FRAMES" | bc -l)
+    # Normalize to ensure leading zero (bc omits it for values < 1, e.g. ".7" → "0.7")
+    T=$(printf "%.6f" "$T_RAW")
     # Round to 1 decimal for filename readability
-    T_LABEL=$(printf "%.1f" "$T")
+    T_LABEL=$(printf "%.1f" "$T_RAW")
     SEQ=$(printf "%03d" $(( i + 1 )))
     OUTFILE="${OUTPUT_DIR}/${PREFIX}_${SEQ}_${T_LABEL}s.jpg"
 
