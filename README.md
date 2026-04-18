@@ -116,4 +116,6 @@ The installer adds the following skills when Claude Code is detected:
 | `/composite-bezel` | Run `composite_bezel` from a Claude Code session |
 | `/sync-clap` | Run `sync_clap` from a Claude Code session |
 | `/sync-visual` | Interactively find sync offsets using Claude's vision (no clap required) |
+| `/analyze-video` | Analyze a video by extracting frames and describing what it contains |
+| `/organize-onsite` | Organize a folder of raw onsite videos end-to-end: classify, pair iPad↔camera, sync, and composite |
 | `/se-video-tools` | Update all tools |
