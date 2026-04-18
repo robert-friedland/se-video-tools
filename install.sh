@@ -105,6 +105,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/analyze-video.md" \
         -o "$SKILL_DIR/analyze-video.md"
     echo "✓ Claude /analyze-video skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/organize-onsite.md" \
+        -o "$SKILL_DIR/organize-onsite.md"
+    echo "✓ Claude /organize-onsite skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -119,4 +122,4 @@ echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over b
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
 echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /se-video-tools  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /organize-onsite  /se-video-tools  (Claude Code)"
