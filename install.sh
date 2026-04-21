@@ -80,6 +80,13 @@ chmod +x "$INSTALL_DIR/extract_frames.sh"
 ln -sf "$INSTALL_DIR/extract_frames.sh" "$BREW_BIN/extract_frames"
 echo "✓ extract_frames installed → $BREW_BIN/extract_frames"
 
+# Download elevenlabs_tts script
+echo "Downloading elevenlabs_tts..."
+curl -fsSL "${GITHUB_RAW_BASE}/elevenlabs_tts.sh" -o "$INSTALL_DIR/elevenlabs_tts.sh"
+chmod +x "$INSTALL_DIR/elevenlabs_tts.sh"
+ln -sf "$INSTALL_DIR/elevenlabs_tts.sh" "$BREW_BIN/elevenlabs_tts"
+echo "✓ elevenlabs_tts installed → $BREW_BIN/elevenlabs_tts"
+
 # Download update.sh (top-level update dispatcher)
 echo "Downloading se-video-tools (update dispatcher)..."
 curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
@@ -105,6 +112,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/analyze-video.md" \
         -o "$SKILL_DIR/analyze-video.md"
     echo "✓ Claude /analyze-video skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/elevenlabs-tts.md" \
+        -o "$SKILL_DIR/elevenlabs-tts.md"
+    echo "✓ Claude /elevenlabs-tts skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -118,5 +128,6 @@ echo "  ipad_bezel <input.mp4>                          # add bezel overlay"
 echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over background"
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
 echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
+echo "  elevenlabs_tts \"text\" [--voice NAME]             # TTS with word/sentence timings (needs ELEVENLABS_API_KEY)"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /se-video-tools  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /se-video-tools  (Claude Code)"

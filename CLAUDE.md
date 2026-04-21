@@ -8,6 +8,11 @@ CLI tools for compositing iPad screen recordings over real-life background video
 - **`composite_bezel_gpu/`** — Swift CLI (AVFoundation + Core Image/Metal); video-only output, shell does audio mux
 - **`ipad_bezel.sh`** — add iPad bezel overlay to a standalone screen recording
 - **`sync_clap.sh`** — detect clap sync offset between background and screen recording
+- **`elevenlabs_tts.sh`** — ElevenLabs TTS with char/word/sentence timings; outputs mp3 + json + words/sentences SRTs
+
+## Environment variables
+
+- `ELEVENLABS_API_KEY` — required for `elevenlabs_tts`. Free tier (TTS-only) is fine; the tool reports quota after each run.
 
 ## Key flags (composite_bezel.sh / composite_bezel_gpu)
 

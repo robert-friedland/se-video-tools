@@ -58,6 +58,21 @@ if [ "$1" = "update" ]; then
     mv "$SCRIPT_DIR/extract_frames.sh.tmp" "$SCRIPT_DIR/extract_frames.sh"
     echo "✓ extract_frames updated"
 
+    echo "Updating elevenlabs_tts..."
+    # Bootstrap: users who installed before elevenlabs_tts existed don't have the file yet.
+    if [ ! -f "$SCRIPT_DIR/elevenlabs_tts.sh" ]; then
+        curl -fsSL "${GITHUB_RAW_BASE}/elevenlabs_tts.sh" -o "$SCRIPT_DIR/elevenlabs_tts.sh.tmp"
+        [ -s "$SCRIPT_DIR/elevenlabs_tts.sh.tmp" ] || { echo "elevenlabs_tts download failed or empty"; rm -f "$SCRIPT_DIR/elevenlabs_tts.sh.tmp"; exit 1; }
+        grep -q '^#!/bin/bash' "$SCRIPT_DIR/elevenlabs_tts.sh.tmp" || { echo "elevenlabs_tts download corrupt"; rm -f "$SCRIPT_DIR/elevenlabs_tts.sh.tmp"; exit 1; }
+        mv "$SCRIPT_DIR/elevenlabs_tts.sh.tmp" "$SCRIPT_DIR/elevenlabs_tts.sh"
+        chmod +x "$SCRIPT_DIR/elevenlabs_tts.sh"
+        # Symlink into brew bin so existing installs pick it up on PATH
+        BREW_BIN="$(brew --prefix 2>/dev/null)/bin"
+        [ -d "$BREW_BIN" ] && ln -sf "$SCRIPT_DIR/elevenlabs_tts.sh" "$BREW_BIN/elevenlabs_tts"
+        echo "✓ elevenlabs_tts bootstrapped"
+    fi
+    "$SCRIPT_DIR/elevenlabs_tts.sh" update || { echo "elevenlabs_tts update failed"; exit 1; }
+
     echo "All tools updated."
     exit 0
 fi
