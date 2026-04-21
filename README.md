@@ -80,6 +80,36 @@ sync_clap background.mp4 screen_recording.mp4
 
 ---
 
+### `elevenlabs_tts`
+
+Generates narration audio via the ElevenLabs API with per-character, per-word, and per-sentence timings. Outputs an mp3 plus split JSON files (`.sentences.json`, `.words.json`, plus a combined `.json` with everything) and two SRTs for Resolve import. Split files let downstream tools load only the granularity they need — pair sentences with `/analyze-video` to match narration beats to background footage. Requires `ELEVENLABS_API_KEY` env var; free-tier TTS-only accounts work.
+
+```bash
+elevenlabs_tts [OPTIONS] "text" | --text-file path.txt
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--voice NAME_OR_ID` | `Chris` | Built-in name (Chris, Rachel, Adam, …) or 20-char raw voice_id. `--list-voices` prints the map. |
+| `--model ID` | `eleven_multilingual_v2` | Also supports `eleven_turbo_v2_5`, `eleven_flash_v2_5`. |
+| `--stability 0..1` | `0.5` | Lower = more expressive, higher = more consistent. |
+| `--similarity 0..1` | `0.75` | similarity_boost. |
+| `--style 0..1` | `0.0` | Style exaggeration. |
+| `--speed 0.7..1.2` | `1.0` | voice_settings.speed. |
+| `--no-speaker-boost` | off | Disables use_speaker_boost. |
+| `--format FMT` | `mp3_44100_128` | Passed through as `?output_format=`. |
+| `--text-file PATH` | — | Read narration from file. |
+| `--out PREFIX` | derived | Output basename. Without `--out`, auto-suffixes `_1`, `_2`, … on collision. |
+| `--audio-only` | off | Skip JSON + SRTs; write only `.mp3`. |
+| `--force` | off | Overwrite existing artifacts. |
+
+```bash
+elevenlabs_tts "Welcome to the demo. Today we'll see the new interface."
+elevenlabs_tts --voice Rachel --out intro "This is Rachel narrating."
+```
+
+---
+
 ### `/sync-visual` (Claude Code skill)
 
 Interactively syncs two videos when there is no clap — or when you want to sync on a specific on-screen event. Claude extracts frames in a coarse-to-fine sweep, visually identifies the matching event in both clips, and outputs `--bg-start` / `--scr-start` offsets. Expect several rounds of frame extraction and review before a final offset is produced.
@@ -94,7 +124,7 @@ Requires [Claude Code](https://claude.ai/code). Invoke with `/sync-visual` in a 
 se-video-tools update
 ```
 
-Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
+Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
 
 Or update individual tools:
 
@@ -102,6 +132,7 @@ Or update individual tools:
 ipad_bezel update
 composite_bezel update
 sync_clap update
+elevenlabs_tts update
 ```
 
 ---
@@ -116,4 +147,5 @@ The installer adds the following skills when Claude Code is detected:
 | `/composite-bezel` | Run `composite_bezel` from a Claude Code session |
 | `/sync-clap` | Run `sync_clap` from a Claude Code session |
 | `/sync-visual` | Interactively find sync offsets using Claude's vision (no clap required) |
+| `/elevenlabs-tts` | Generate ElevenLabs narration with word/sentence timings |
 | `/se-video-tools` | Update all tools |
