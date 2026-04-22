@@ -23,16 +23,16 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
     grep -q '^#!/bin/bash' "$SCRIPT_DIR/update.sh.tmp" || { echo "Download corrupt (unexpected content)"; rm -f "$SCRIPT_DIR/update.sh.tmp"; exit 1; }
     chmod +x "$SCRIPT_DIR/update.sh.tmp"
     mv "$SCRIPT_DIR/update.sh.tmp" "$SCRIPT_DIR/update.sh"
-    # Update Claude skill (guard on ~/.claude matches install.sh; || true: file may not
-    # exist on GitHub during initial rollout until this PR merges)
+    # Update Claude skills (guard on ~/.claude matches install.sh; || true: file may not
+    # exist on GitHub during initial rollout until this PR merges).
+    # Keep this list in sync with install.sh's skill block.
     if [ -d "$HOME/.claude" ]; then
         mkdir -p "$HOME/.claude/commands"
-        curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
-            -o "$HOME/.claude/commands/se-video-tools.md" || true
-        curl -fsSL "${GITHUB_RAW_BASE}/commands/sync-visual.md" \
-            -o "$HOME/.claude/commands/sync-visual.md" || true
-        curl -fsSL "${GITHUB_RAW_BASE}/commands/analyze-video.md" \
-            -o "$HOME/.claude/commands/analyze-video.md" || true
+        for cmd in ipad-bezel composite-bezel sync-clap sync-visual analyze-video \
+                   elevenlabs-tts se-video-tools organize-onsite; do
+            curl -fsSL "${GITHUB_RAW_BASE}/commands/${cmd}.md" \
+                -o "$HOME/.claude/commands/${cmd}.md" || true
+        done
         echo "Claude skills updated."
     fi
     # Re-exec new version to pick up any changes; _SE_UPDATED prevents infinite loop
