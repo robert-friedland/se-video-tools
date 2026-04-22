@@ -118,6 +118,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/organize-onsite.md" \
+        -o "$SKILL_DIR/organize-onsite.md"
+    echo "✓ Claude /organize-onsite skill installed"
 else
     echo "  Claude Code not detected — skipping skill install"
 fi
@@ -130,4 +133,4 @@ echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offse
 echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
 echo "  elevenlabs_tts \"text\" [--voice NAME]             # TTS with word/sentence timings (needs ELEVENLABS_API_KEY)"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /se-video-tools  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /se-video-tools  /organize-onsite  (Claude Code)"
