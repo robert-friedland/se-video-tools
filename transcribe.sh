@@ -13,6 +13,11 @@
 #                           (default: mp4,mov,m4v,mkv,MP4,MOV,M4V,MKV,wav,mp3)
 #   --min-words N           Threshold for likely_interview flag (default: 30)
 #   --threads N             Threads for whisper-cli (default: whisper-cli's own default)
+#   --prompt TEXT           Initial-prompt context passed to whisper-cli. Biases model
+#                           toward punctuated, capitalized output. Default is a neutral
+#                           interview-style hint; override to match your domain, or pass
+#                           --no-prompt to disable. Prompt text never appears in output.
+#   --no-prompt             Disable the default initial prompt.
 #   --force                 Overwrite existing outputs
 #   --keep-wav              Keep the extracted 16kHz WAV next to the video (default: delete)
 #   -h, --help              Show this help
@@ -63,6 +68,12 @@ MIN_WORDS="30"
 THREADS=""
 FORCE="false"
 KEEP_WAV="false"
+# Initial prompt biases Whisper toward punctuated, capitalized output. Without this,
+# some audio (British accents + noisy rooms, in our tests) comes back as one giant
+# run-on string with no periods — which collapses sentence-splitting to a single
+# 6000+ char "sentence." The prompt itself does not appear in the transcript; it
+# only anchors the model's output style.
+PROMPT="Hello. This is an interview. The speaker uses proper punctuation, capitalization, and complete sentences."
 POSITIONALS=()
 
 while [ $# -gt 0 ]; do
@@ -72,8 +83,10 @@ while [ $# -gt 0 ]; do
         --ext)          EXT_LIST="$2"; shift 2 ;;
         --min-words)    MIN_WORDS="$2"; shift 2 ;;
         --threads)      THREADS="$2"; shift 2 ;;
+        --prompt)       PROMPT="$2"; shift 2 ;;
+        --no-prompt)    PROMPT=""; shift ;;
         --force)        FORCE="true"; shift ;;
-        --keep-wav)   KEEP_WAV="true"; shift ;;
+        --keep-wav)     KEEP_WAV="true"; shift ;;
         -h|--help)      usage; exit 0 ;;
         --*)            echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
         *)              POSITIONALS+=("$1"); shift ;;
@@ -213,12 +226,15 @@ PYEOF
     local whisper_base="${base}.transcribe"   # whisper-cli adds its own extensions
     local threads_args=()
     [ -n "$THREADS" ] && threads_args=(-t "$THREADS")
+    local prompt_args=()
+    [ -n "$PROMPT" ] && prompt_args=(--prompt "$PROMPT")
 
     # -oj     JSON output
     # -ml 1   one segment per word
     # -sow    split on word boundary (not sub-word token)
     # -of     output basename (no extension)
     # -np     quiet: don't print segments as they come in (we'll show our own progress)
+    # --prompt  initial context; biases output style toward punctuation/capitalization
     if ! whisper-cli \
             -m "$MODEL_PATH" \
             -l "$LANGUAGE" \
@@ -226,6 +242,7 @@ PYEOF
             -oj -ml 1 -sow \
             -of "$whisper_base" \
             -np \
+            "${prompt_args[@]}" \
             "${threads_args[@]}" >/dev/null 2>"${wav}.log"; then
         echo "  whisper-cli failed (see ${wav}.log); skipping" >&2
         [ "$KEEP_WAV" = "true" ] || rm -f "$wav"
@@ -410,6 +427,15 @@ with open(summary_tsv, "a") as f:
 # ── Per-file report ──────────────────────────────────────────────────────────
 tag = "interview" if summary["likely_interview"] else "not-interview"
 print(f"  {summary['word_count']} words, {summary['speech_seconds']:.1f}s speech / {summary['duration_seconds']:.1f}s ({summary['speech_ratio']:.2f}) → {tag}")
+
+# Punctuation-loss warning: if we got a nontrivial amount of speech but the output
+# has no terminators, the sentence splitter produced one giant "sentence." Known
+# Whisper quirk on some accents/noise profiles — usually fixed by --prompt.
+terminators = sum(1 for w in words if any(p in w["word"] for p in ".!?"))
+if len(words) >= 100 and terminators == 0:
+    print(f"  WARNING: no punctuation found — sentences collapsed to a single cue.")
+    print(f"           Re-run with --force and a custom --prompt to retry:")
+    print(f"             transcribe --force --prompt \"Hello. This is a meeting. Proper sentences.\" <file>")
 print(f"  → {out_json}")
 PYEOF
 
