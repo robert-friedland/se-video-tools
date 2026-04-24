@@ -126,8 +126,10 @@ transcribe <video-or-folder> [OPTIONS]
 | `--ext LIST` | `mp4,mov,m4v,mkv,MP4,MOV,M4V,MKV,wav,mp3` | Extensions to process in folder mode. |
 | `--min-words N` | `30` | Real-word threshold for `likely_interview` flag. |
 | `--threads N` | whisper default | Threads for `whisper-cli`. |
+| `--prompt TEXT` | neutral punctuated hint | Initial prompt passed to Whisper; biases output toward punctuation/capitalization (prompt text never appears in transcript). |
+| `--no-prompt` | off | Disable the default initial prompt. |
 | `--force` | off | Overwrite existing outputs. |
-| `--audio-only` | off | Keep the extracted 16 kHz WAV next to the video. |
+| `--keep-wav` | off | Keep the extracted 16 kHz WAV next to the video. |
 
 For each `<video>`, writes: `<video>.transcript.json` (combined + summary), `<video>.transcript.words.json`, `<video>.transcript.sentences.json`, matching `.srt` files, and `.transcript.txt`.
 

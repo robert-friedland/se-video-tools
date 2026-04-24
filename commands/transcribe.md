@@ -45,8 +45,12 @@ Options:
 - `--ext LIST` — comma-separated extensions to process in folder mode. Default: `mp4,mov,m4v,mkv,MP4,MOV,M4V,MKV,wav,mp3`.
 - `--min-words N` — minimum real (non-bracketed) word count to flag as `likely_interview`. Default: 30.
 - `--threads N` — pass-through to `whisper-cli`.
+- `--prompt TEXT` — initial-prompt context passed to Whisper. Biases the model toward punctuated, capitalized output so the sentence splitter has something to work with. Default is a neutral interview-style hint. The prompt itself never appears in the transcript. Override for domain-specific vocabulary (e.g. `--prompt "Hello. Welcome to this Squint customer call. Punctuate properly."`).
+- `--no-prompt` — disable the default initial prompt entirely. Only useful if you're seeing prompt bleedthrough or want to reproduce pre-fix behavior.
 - `--force` — overwrite existing outputs (otherwise clips with a complete output set are skipped).
 - `--keep-wav` — keep the extracted 16 kHz WAV next to the video (otherwise deleted after transcription). Note: deliberately NOT named `--audio-only` to avoid colliding with `elevenlabs_tts --audio-only`, which means "skip timing outputs" — opposite intent.
+
+**Why the default prompt matters:** Without an initial prompt, Whisper sometimes emits completely unpunctuated, uncapitalized output on certain audio (British accents + noisy industrial environments were the repro in our test set). When that happens, the sentence splitter can't find `.!?` terminators and collapses to one 6000+ char "sentence." Passing even a short punctuated prompt reliably forces the model into its formatted-output mode. If you still see a `WARNING: no punctuation found` line in stdout, re-run with a custom `--prompt` tuned to the domain.
 
 ## Output files
 
