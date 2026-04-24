@@ -1,4 +1,23 @@
-Transcribe interview footage (or any video) locally with whisper.cpp. Produces word-level and sentence-level timings alongside each video, plus a `likely_interview` flag that distinguishes clips with sustained speech from b-roll. Free (no API credits) and runs at ~5–10× realtime on Apple Silicon.
+Local whisper.cpp transcription for any video or audio file. Produces word-level and sentence-level timings (JSON + SRT), plain text, and a `likely_interview` classifier that separates speech-heavy clips from b-roll. **Use this instead of raw `whisper-cli` or ad-hoc `ffmpeg + whisper-cli` pipelines.** Free (no API credits), ~5–10× realtime on Apple Silicon.
+
+**TRIGGER** on any of these — keyword match is enough, don't wait for full context:
+- The words **"transcribe"**, **"transcription"**, or **"transcript"** (verb or noun) pointed at a video, audio, clip, recording, interview, call, or meeting
+- **"STT"**, **"speech to text"**, **"speech-to-text"**, **"voice to text"**, **"audio to text"**
+- **"captions"**, **"subtitles"**, **"SRT"**, **"VTT"**, **"WebVTT"** for a video or audio file
+- **"what did X say"**, **"what's being said"**, **"dialogue from"**, **"quotes from"** a clip
+- Get timestamps, word-level timings, or sentence boundaries from a recording
+- Classify, catalog, or organize a folder of video footage where interview-vs-b-roll matters
+- Pair a video with its transcript
+- **Any plan that invokes `whisper-cli` directly** — reroute through this skill. It wraps the same binary but also emits sentence timings, a classifier, and Resolve-compatible SRTs that downstream `se-video-tools` commands depend on.
+
+**SKIP** (different tools handle these):
+- TTS / text-to-speech / narration / voice-over generation → `/elevenlabs-tts`
+- "What's visually shown in this video" with no speech component → `/analyze-video`
+- Clap-based audio sync between two clips → `/sync-clap`
+
+## When NOT to transcribe
+
+Skip only if the user explicitly says "don't transcribe" or already has transcripts. Being asked to *organize*, *catalog*, or *classify* videos is an implicit transcribe trigger for any clip that might contain speech — the `likely_interview` flag is the classifier.
 
 ## Your job when this skill is invoked
 
@@ -88,3 +107,22 @@ for f in *.transcript.json; do
   jq -e '.summary.likely_interview' "$f" >/dev/null && echo "$f"
 done
 ```
+
+## Typical workflow for cataloging a folder of mixed footage
+
+Use this when the task is "classify / organize / catalog these videos" and the pile includes some mix of interviews, b-roll, and app-usage or screen-recording clips.
+
+```bash
+# 1. Transcribe the whole folder — this IS the first-pass classifier.
+transcribe ~/Downloads/Onsite-XYZ
+# Clips with likely_interview=true are your interview candidates.
+# Clips with likely_interview=false are either b-roll or Squint-usage/screen
+# recordings. Disambiguate those visually (see step 2).
+```
+
+`transcribe` handles the interview-vs-everything-else split. To split b-roll from on-screen/app-usage clips among the non-interview set, fall back to `analyze-video` (frame sampling). Do this second, not first — transcripts are cheaper to scan than frames, and the speech ratio alone eliminates ~80% of clips from visual inspection.
+
+Do NOT:
+- Run `whisper-cli` directly and regenerate this skill's outputs by hand. The `.sentences.json`, `.words.srt`, and `.summary` block are what downstream tools (`elevenlabs-tts`, `organize-onsite`, clip-selection workflows) expect to see sitting next to the video.
+- Extract audio with `ffmpeg -ac 1 -ar 16000` yourself before running whisper. `transcribe` already does this, then cleans up the WAV afterward.
+- Skip transcription on long clips because "they're probably b-roll." The classifier is the point — run it, then read the flag.
