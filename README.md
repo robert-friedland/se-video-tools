@@ -7,6 +7,7 @@ Shell tools for compositing iPad screen recordings with a realistic bezel overla
 - macOS Apple Silicon (M1 or later)
 - [Homebrew](https://brew.sh) — installed automatically if missing
 - ffmpeg — installed automatically via Homebrew
+- whisper-cpp — installed automatically via Homebrew (for `transcribe`)
 
 ## Install
 
@@ -110,6 +111,34 @@ elevenlabs_tts --voice Rachel --out intro "This is Rachel narrating."
 
 ---
 
+### `transcribe`
+
+Local speech-to-text via [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Runs offline — no API key, no credits. Produces word-level and sentence-level timings alongside each video, plus a `likely_interview` classifier flag so you can filter a folder of mixed interview / b-roll footage to just the clips worth searching for quotes. Models auto-download to `~/.whisper-models/` on first use.
+
+```bash
+transcribe <video-or-folder> [OPTIONS]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model NAME_OR_PATH` | `large-v3-turbo` | Short name (`tiny.en`, `base.en`, `small.en`, `medium.en`, `large-v3`, `large-v3-turbo`) or explicit `.bin` path. |
+| `--language CODE` | `en` | Language hint. Use `auto` for detection. |
+| `--ext LIST` | `mp4,mov,m4v,mkv,MP4,MOV,M4V,MKV,wav,mp3` | Extensions to process in folder mode. |
+| `--min-words N` | `30` | Real-word threshold for `likely_interview` flag. |
+| `--threads N` | whisper default | Threads for `whisper-cli`. |
+| `--force` | off | Overwrite existing outputs. |
+| `--audio-only` | off | Keep the extracted 16 kHz WAV next to the video. |
+
+For each `<video>`, writes: `<video>.transcript.json` (combined + summary), `<video>.transcript.words.json`, `<video>.transcript.sentences.json`, matching `.srt` files, and `.transcript.txt`.
+
+```bash
+transcribe ~/Onsites/2026-04-idexx                      # batch: every video in the folder
+transcribe "Brian Interview.MP4"                        # single file
+transcribe --model small.en --language auto clip.mov    # smaller model, auto language
+```
+
+---
+
 ### `/sync-visual` (Claude Code skill)
 
 Interactively syncs two videos when there is no clap — or when you want to sync on a specific on-screen event. Claude extracts frames in a coarse-to-fine sweep, visually identifies the matching event in both clips, and outputs `--bg-start` / `--scr-start` offsets. Expect several rounds of frame extraction and review before a final offset is produced.
@@ -124,7 +153,7 @@ Requires [Claude Code](https://claude.ai/code). Invoke with `/sync-visual` in a 
 se-video-tools update
 ```
 
-Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
+Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
 
 Or update individual tools:
 
@@ -133,6 +162,7 @@ ipad_bezel update
 composite_bezel update
 sync_clap update
 elevenlabs_tts update
+transcribe update
 ```
 
 ---
@@ -148,4 +178,5 @@ The installer adds the following skills when Claude Code is detected:
 | `/sync-clap` | Run `sync_clap` from a Claude Code session |
 | `/sync-visual` | Interactively find sync offsets using Claude's vision (no clap required) |
 | `/elevenlabs-tts` | Generate ElevenLabs narration with word/sentence timings |
+| `/transcribe` | Local Whisper transcription with word/sentence timings and interview-vs-b-roll classifier |
 | `/se-video-tools` | Update all tools |

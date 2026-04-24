@@ -25,6 +25,14 @@ else
     echo "✓ ffmpeg already installed"
 fi
 
+# whisper-cpp required for local STT (transcribe)
+if ! command -v whisper-cli &>/dev/null; then
+    echo "Installing whisper-cpp..."
+    brew install whisper-cpp
+else
+    echo "✓ whisper-cpp already installed"
+fi
+
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
@@ -87,6 +95,13 @@ chmod +x "$INSTALL_DIR/elevenlabs_tts.sh"
 ln -sf "$INSTALL_DIR/elevenlabs_tts.sh" "$BREW_BIN/elevenlabs_tts"
 echo "✓ elevenlabs_tts installed → $BREW_BIN/elevenlabs_tts"
 
+# Download transcribe script
+echo "Downloading transcribe..."
+curl -fsSL "${GITHUB_RAW_BASE}/transcribe.sh" -o "$INSTALL_DIR/transcribe.sh"
+chmod +x "$INSTALL_DIR/transcribe.sh"
+ln -sf "$INSTALL_DIR/transcribe.sh" "$BREW_BIN/transcribe"
+echo "✓ transcribe installed → $BREW_BIN/transcribe"
+
 # Download update.sh (top-level update dispatcher)
 echo "Downloading se-video-tools (update dispatcher)..."
 curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
@@ -115,6 +130,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/elevenlabs-tts.md" \
         -o "$SKILL_DIR/elevenlabs-tts.md"
     echo "✓ Claude /elevenlabs-tts skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/transcribe.md" \
+        -o "$SKILL_DIR/transcribe.md"
+    echo "✓ Claude /transcribe skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -132,5 +150,6 @@ echo "  composite_bezel <bg.mp4> <screen.mp4>           # composite bezel over b
 echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offset"
 echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
 echo "  elevenlabs_tts \"text\" [--voice NAME]             # TTS with word/sentence timings (needs ELEVENLABS_API_KEY)"
+echo "  transcribe <video-or-folder>                    # local Whisper STT with word/sentence timings"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /se-video-tools  /organize-onsite  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /se-video-tools  /organize-onsite  (Claude Code)"
