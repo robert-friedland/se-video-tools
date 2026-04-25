@@ -9,6 +9,8 @@ CLI tools for compositing iPad screen recordings over real-life background video
 - **`ipad_bezel.sh`** — add iPad bezel overlay to a standalone screen recording
 - **`sync_clap.sh`** — detect clap sync offset between background and screen recording
 - **`elevenlabs_tts.sh`** — ElevenLabs TTS with char/word/sentence timings; outputs mp3 + json + words/sentences SRTs
+- **`transcribe.sh`** — local whisper.cpp transcription; word/sentence timings + interview classifier
+- **`build_timeline.sh`** — JSON cut list → DaVinci Resolve-compatible Final Cut Pro 7 XML (xmeml v5). ffprobes each source for frame rate, resolution, audio channels, and embedded SMPTE timecode. Timecode round-trip is the critical constraint: Resolve validates `<file><timecode>` against the media's real embedded TC, so placeholder `00:00:00:00` breaks import when the source actually carries a TC. FCPXML 1.10 is rejected by Resolve — do not substitute.
 
 ## Environment variables
 
