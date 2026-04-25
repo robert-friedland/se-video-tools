@@ -15,7 +15,7 @@ Shell tools for compositing iPad screen recordings with a realistic bezel overla
 curl -fsSL https://raw.githubusercontent.com/robert-friedland/se-video-tools/main/install.sh | bash
 ```
 
-This installs `ipad_bezel`, `composite_bezel`, and `sync_clap` into `~/.se-video-tools/` and symlinks them into your Homebrew bin so they're on your PATH immediately. If [Claude Code](https://claude.ai/code) is installed, the `/ipad-bezel`, `/composite-bezel`, `/sync-clap`, `/sync-visual`, and `/se-video-tools` skills are also installed.
+This installs `ipad_bezel`, `composite_bezel`, `sync_clap`, and friends into `~/.se-video-tools/` and symlinks them into your Homebrew bin so they're on your PATH immediately. If [Claude Code](https://claude.ai/code) is installed, the matching skills are also installed (see the Claude Code skills table at the bottom).
 
 ---
 
@@ -141,6 +141,43 @@ transcribe --model small.en --language auto clip.mov    # smaller model, auto la
 
 ---
 
+### `build_timeline`
+
+Generate a DaVinci Resolve-compatible Final Cut Pro 7 XML (xmeml v5) timeline from a JSON cut list. Each segment names a source video, an in-point (seconds), and a duration; the tool ffprobes each source for frame rate, resolution, audio channels, and embedded SMPTE timecode, then emits xmeml that Resolve imports with all media linked automatically. Useful for turning a scanned-transcripts quote list into a rough cut you can trim in an NLE instead of re-rendering from ffmpeg.
+
+```bash
+build_timeline [--name NAME] <input.json> [output.xml]
+```
+
+Input JSON (array form):
+
+```json
+[
+  {"source": "/abs/path/interview1.mp4", "start": 57.60, "duration": 12.40, "label": "Beat 1"},
+  {"gap": 0.60},
+  {"source": "/abs/path/interview2.mp4", "start": 234.84, "duration": 10.16}
+]
+```
+
+Or object form with a sequence name:
+
+```json
+{ "name": "My Rough Cut", "segments": [ /* ... */ ] }
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--name NAME` | input basename | Sequence name embedded in the XML. Ignored if the JSON object has `name`. |
+
+All sources on a given timeline must share one frame rate and one resolution; mismatches are rejected with a message naming the offender. Import the resulting `.xml` into Resolve via `File → Import → Timeline…`.
+
+```bash
+build_timeline cut.json rough.xml
+echo '[{"source":"/abs/clip.mp4","start":0,"duration":10}]' | build_timeline - -
+```
+
+---
+
 ### `/sync-visual` (Claude Code skill)
 
 Interactively syncs two videos when there is no clap — or when you want to sync on a specific on-screen event. Claude extracts frames in a coarse-to-fine sweep, visually identifies the matching event in both clips, and outputs `--bg-start` / `--scr-start` offsets. Expect several rounds of frame extraction and review before a final offset is produced.
@@ -155,7 +192,7 @@ Requires [Claude Code](https://claude.ai/code). Invoke with `/sync-visual` in a 
 se-video-tools update
 ```
 
-Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
+Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, `build_timeline`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
 
 Or update individual tools:
 
@@ -165,6 +202,7 @@ composite_bezel update
 sync_clap update
 elevenlabs_tts update
 transcribe update
+build_timeline update
 ```
 
 ---
@@ -181,4 +219,5 @@ The installer adds the following skills when Claude Code is detected:
 | `/sync-visual` | Interactively find sync offsets using Claude's vision (no clap required) |
 | `/elevenlabs-tts` | Generate ElevenLabs narration with word/sentence timings |
 | `/transcribe` | Local Whisper transcription with word/sentence timings and interview-vs-b-roll classifier |
+| `/build-timeline` | Generate a DaVinci Resolve-compatible xmeml timeline from a JSON cut list |
 | `/se-video-tools` | Update all tools |

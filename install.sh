@@ -102,6 +102,13 @@ chmod +x "$INSTALL_DIR/transcribe.sh"
 ln -sf "$INSTALL_DIR/transcribe.sh" "$BREW_BIN/transcribe"
 echo "✓ transcribe installed → $BREW_BIN/transcribe"
 
+# Download build_timeline script
+echo "Downloading build_timeline..."
+curl -fsSL "${GITHUB_RAW_BASE}/build_timeline.sh" -o "$INSTALL_DIR/build_timeline.sh"
+chmod +x "$INSTALL_DIR/build_timeline.sh"
+ln -sf "$INSTALL_DIR/build_timeline.sh" "$BREW_BIN/build_timeline"
+echo "✓ build_timeline installed → $BREW_BIN/build_timeline"
+
 # Download update.sh (top-level update dispatcher)
 echo "Downloading se-video-tools (update dispatcher)..."
 curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
@@ -133,6 +140,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/transcribe.md" \
         -o "$SKILL_DIR/transcribe.md"
     echo "✓ Claude /transcribe skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/build-timeline.md" \
+        -o "$SKILL_DIR/build-timeline.md"
+    echo "✓ Claude /build-timeline skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -151,5 +161,6 @@ echo "  sync_clap <bg.mp4> <screen.mp4>                 # detect clap sync offse
 echo "  extract_frames <video> <n> <dir>                # extract N evenly-distributed frames"
 echo "  elevenlabs_tts \"text\" [--voice NAME]             # TTS with word/sentence timings (needs ELEVENLABS_API_KEY)"
 echo "  transcribe <video-or-folder>                    # local Whisper STT with word/sentence timings"
+echo "  build_timeline <cut.json> [out.xml]             # generate Resolve xmeml timeline from a JSON cut list"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /se-video-tools  /organize-onsite  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /build-timeline  /se-video-tools  /organize-onsite  (Claude Code)"
