@@ -149,7 +149,7 @@ Generate a DaVinci Resolve-compatible Final Cut Pro 7 XML (xmeml v5) timeline fr
 build_timeline [--name NAME] <input.json> [output.xml]
 ```
 
-Input JSON (array form):
+**Single-track input** — array form:
 
 ```json
 [
@@ -164,6 +164,26 @@ Or object form with a sequence name:
 ```json
 { "name": "My Rough Cut", "segments": [ /* ... */ ] }
 ```
+
+**Multi-track input** — V1 talking heads + V2 B-roll overlay. V1 uses the sequential format above; V2+ uses absolute timeline positions and is video-only (V1 audio plays continuously underneath, V2 covers V1 video as full-frame replacement):
+
+```json
+{
+  "name": "My Rough Cut v2",
+  "tracks": {
+    "V1": [
+      {"source": "/abs/interview1.mp4", "start": 57.60, "duration": 12.40, "label": "Beat 1"},
+      {"gap": 0.60},
+      {"source": "/abs/interview2.mp4", "start": 234.84, "duration": 10.16}
+    ],
+    "V2": [
+      {"timeline_start": 2.50, "duration": 7.50, "source": "/abs/broll.mp4", "source_in": 4.0, "label": "Beat 1 overlay"}
+    ]
+  }
+}
+```
+
+V2+ segments use `timeline_start` (absolute seconds) instead of sequential placement; there's no `gap` on V2+. Currently supports V1 and V2; V3+ would extend the same pattern. Schema is also limited to a single audio track derived from V1.
 
 | Flag | Default | Description |
 |------|---------|-------------|

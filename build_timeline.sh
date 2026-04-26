@@ -10,9 +10,9 @@
 #                   or "Timeline" when reading stdin.
 #   -h, --help      Show this help.
 #
-# Input JSON — two accepted shapes.
+# Input JSON — three accepted shapes.
 #
-#   Array form (simplest):
+#   Array form (simplest, single video track):
 #     [
 #       {"source": "/abs/path.mp4", "start": 57.60, "duration": 12.40, "label": "Beat 1"},
 #       {"gap": 0.60},
@@ -25,12 +25,34 @@
 #       "segments": [ ... same as array form ... ]
 #     }
 #
-# Fields:
+#   Multi-track form (V1 talking heads + V2 B-roll overlay, etc.):
+#     {
+#       "name": "My Rough Cut",
+#       "tracks": {
+#         "V1": [ ... same shape as segments above ... ],
+#         "V2": [
+#           {"timeline_start": 2.5, "duration": 7.5, "source": "/abs/broll.mp4", "source_in": 4.0}
+#         ]
+#       }
+#     }
+#
+# Fields (V1 segment):
 #   source       absolute path to an MP4/MOV/etc. readable by ffprobe
 #   start        seconds into the source where the clip begins
 #   duration     seconds to keep from that source
 #   label        optional — unused by Resolve on import but handy in the JSON
 #   gap          seconds of empty timeline before the next clip (no source needed)
+#
+# Fields (V2+ overlay segment):
+#   timeline_start  seconds from sequence start where the overlay begins (absolute)
+#   duration        seconds the overlay covers
+#   source          absolute path
+#   source_in       seconds into the source where the overlay begins (default 0)
+#   label           optional
+#
+# V2+ tracks: absolute timeline positions, no `gap`, video-only (no linked audio),
+# rendered as full-frame replacement at 100% scale. The current sequence audio
+# track count and channel layout are computed from V1 sources only.
 #
 # Input path accepts `-` for stdin. Output path accepts `-` for stdout; if
 # omitted, the output path is derived from the input (`foo.json` → `foo.xml`).
@@ -68,7 +90,7 @@ if [ "${1:-}" = "update" ]; then
 fi
 
 usage() {
-    sed -n '2,46p' "$SCRIPT_DIR/build_timeline.sh" | sed 's/^# \{0,1\}//'
+    sed -n '2,60p' "$SCRIPT_DIR/build_timeline.sh" | sed 's/^# \{0,1\}//'
 }
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
@@ -140,24 +162,44 @@ input_path, output_path, seq_name = sys.argv[1:]
 with open(input_path) as f:
     raw = json.load(f)
 
-# Normalize to {name, segments}
+# Normalize to tracks_in: {1: [V1 segs], 2: [V2 segs], ...}.
+# Three input shapes are supported: bare list (V1 only), {name, segments} (V1
+# only), or {name, tracks: {V1: [...], V2: [...], ...}} (multi-track).
+def _track_key_to_int(k):
+    s = str(k).strip().upper()
+    if s.startswith("V"):
+        s = s[1:]
+    return int(s)
+
 if isinstance(raw, list):
-    segments = raw
+    tracks_in = {1: raw}
 elif isinstance(raw, dict):
-    segments = raw.get("segments", [])
     if raw.get("name"):
         seq_name = raw["name"]
+    if "segments" in raw and "tracks" in raw:
+        sys.exit("Error: specify only one of 'segments' or 'tracks', not both.")
+    if "tracks" in raw:
+        tracks_raw = raw["tracks"]
+        if not isinstance(tracks_raw, dict):
+            sys.exit("Error: 'tracks' must be an object mapping track keys (V1, V2, ...) to segment lists.")
+        try:
+            tracks_in = {_track_key_to_int(k): v for k, v in tracks_raw.items()}
+        except ValueError:
+            sys.exit("Error: 'tracks' keys must be V1, V2, ... or 1, 2, ...")
+        if 1 not in tracks_in:
+            sys.exit("Error: 'tracks' must include V1.")
+    else:
+        tracks_in = {1: raw.get("segments", [])}
 else:
-    sys.exit("Error: top-level JSON must be an array or object with 'segments'.")
+    sys.exit("Error: top-level JSON must be an array, or an object with 'segments' or 'tracks'.")
 
-if not segments:
-    sys.exit("Error: no segments in input.")
+if not tracks_in.get(1):
+    sys.exit("Error: V1 has no segments.")
 
-# ── Probe each unique source once ────────────────────────────────────────────
+# ── Probe each unique source once (across all tracks) ────────────────────────
 def ffprobe_source(path):
     if not os.path.isfile(path):
         sys.exit(f"Error: source not found: {path}")
-    # One ffprobe call returns everything we need as JSON.
     cmd = [
         "ffprobe", "-v", "error",
         "-select_streams", "v:0",
@@ -197,15 +239,16 @@ def ffprobe_source(path):
 
 unique_sources = []
 seen = set()
-for seg in segments:
-    if "gap" in seg:
-        continue
-    src = seg.get("source")
-    if not src:
-        sys.exit(f"Error: segment missing 'source': {seg}")
-    if src not in seen:
-        seen.add(src)
-        unique_sources.append(src)
+for track_idx, segs in tracks_in.items():
+    for seg in segs:
+        if "gap" in seg:
+            continue
+        src = seg.get("source")
+        if not src:
+            sys.exit(f"Error: segment missing 'source' (track V{track_idx}): {seg}")
+        if src not in seen:
+            seen.add(src)
+            unique_sources.append(src)
 
 if not unique_sources:
     sys.exit("Error: no clip segments (only gaps).")
@@ -228,38 +271,42 @@ for p in unique_sources[1:]:
             f"{ref['width']}x{ref['height']} but '{p}' is {s['width']}x{s['height']}."
         )
 
-# Audio channels may differ between sources in practice; warn rather than fail.
-channel_counts = {s["channels"] for s in probed.values()}
-if len(channel_counts) > 1:
+# Audio channel count: compute from V1 sources only — overlay (V2+) sources
+# may legitimately have 0 audio channels (silent inserts) and shouldn't pollute
+# the sequence audio count or trigger spurious mismatch warnings.
+v1_sources = []
+v1_seen = set()
+for seg in tracks_in[1]:
+    if "gap" in seg:
+        continue
+    s = seg["source"]
+    if s not in v1_seen:
+        v1_seen.add(s)
+        v1_sources.append(s)
+v1_channel_counts = {probed[p]["channels"] for p in v1_sources}
+if len(v1_channel_counts) > 1:
     print(
-        f"warning: sources have different audio channel counts {sorted(channel_counts)}; "
-        f"using {ref['channels']} for the sequence.", file=sys.stderr,
+        f"warning: V1 sources have different audio channel counts {sorted(v1_channel_counts)}; "
+        f"using {probed[v1_sources[0]]['channels']} for the sequence.", file=sys.stderr,
     )
-seq_channels = ref["channels"]
+seq_channels = probed[v1_sources[0]]["channels"]
 
 # ── Frame-rate → (timebase, ntsc) ────────────────────────────────────────────
 # xmeml v5: integer timebase with optional ntsc=TRUE for .976/.97 variants.
 def resolve_rate(fr_num, fr_den):
-    # NTSC families expressed as X000/1001
     if fr_den == 1001:
-        # fr_num is X * 1000 for X in {24, 30, 60}, roughly
         base = round(fr_num / 1000)
         return base, True
-    # Exact integer fps
     if fr_den == 1:
         return fr_num, False
-    # Fallback: use float approximation
     fps = fr_num / fr_den
     if abs(fps - round(fps)) < 1e-3:
         return int(round(fps)), False
-    # Treat as NTSC: bump up and flag
     return int(round(fps + 0.5)), True
 
 timebase, ntsc = resolve_rate(ref["fr_num"], ref["fr_den"])
 ntsc_str = "TRUE" if ntsc else "FALSE"
 
-# Frame conversion: 1 xmeml frame = 1 tick of the sequence timebase, real duration
-# = 1001 / (timebase * 1000) s when ntsc, else 1 / timebase s.
 if ntsc:
     FRAMES_PER_SEC_NUM = timebase * 1000
     FRAMES_PER_SEC_DEN = 1001
@@ -276,12 +323,11 @@ def normalize_tc(tc, path):
     if not tc:
         tc_warned.append(path)
         return "00:00:00:00"
-    # `08:48:34;11` → `08:48:34:11`
     return tc.replace(";", ":")
 
-# ── File IDs (shared per source) and per-instance clip IDs ───────────────────
+# ── File IDs (shared per source across tracks) and per-(source, track) instance counts ─
 file_id_for = {p: f"{os.path.basename(p)} f" for p in unique_sources}
-instance_counter = {}  # path -> int
+instance_counter = {}  # (path, track) -> int
 
 # ── XML snippet helpers ──────────────────────────────────────────────────────
 RATE_BLOCK = f"<rate>\n                            <timebase>{timebase}</timebase>\n                            <ntsc>{ntsc_str}</ntsc>\n                        </rate>"
@@ -469,44 +515,87 @@ def file_block_full(path, src_meta):
                             </media>
                         </file>"""
 
-# ── Walk segments and build clipitems ────────────────────────────────────────
-video_clips, audio_clips = [], []
+# ── Walk segments per track and build clipitems ──────────────────────────────
+# `file_full_emitted` is keyed per-source (NOT per-(source, track)) — the full
+# <file> block emits once on the first occurrence of a source ACROSS ALL tracks;
+# subsequent occurrences (other tracks, repeat instances) emit <file id=".."/> ref.
+video_tracks = {}   # track_idx -> [clipitem string, ...]
+audio_tracks = {}   # track_idx -> [clipitem string, ...]   (V1 only currently)
 file_full_emitted = set()
-timeline_pos = 0
+all_end_frames = []  # union over all tracks; sequence <duration> = max
+total_clip_count = 0
 
-for seg in segments:
-    if "gap" in seg:
-        gap_sec = float(seg["gap"])
-        timeline_pos += sec_to_frames(gap_sec)
-        continue
+for track_idx in sorted(tracks_in.keys()):
+    segs = tracks_in[track_idx]
+    video_tracks.setdefault(track_idx, [])
+    if track_idx == 1:
+        audio_tracks.setdefault(1, [])
+        timeline_pos = 0  # V1 uses sequential cursor with optional gaps
 
-    src = seg["source"]
-    ss = float(seg.get("start", 0))
-    dur = float(seg["duration"])
-    meta = probed[src]
-    name = os.path.basename(src)
+    for seg in segs:
+        if "gap" in seg:
+            if track_idx != 1:
+                sys.exit(f"Error: 'gap' segments are only allowed on V1 (got track V{track_idx}).")
+            timeline_pos += sec_to_frames(float(seg["gap"]))
+            continue
 
-    inst = instance_counter.get(src, 0)
-    instance_counter[src] = inst + 1
+        src = seg["source"]
+        meta = probed[src]
+        name = os.path.basename(src)
 
-    vid_id = f"{name} v{inst}"
-    aud_id = f"{name} a{inst}"
-    fid = file_id_for[src]
+        if track_idx == 1:
+            ss = float(seg.get("start", 0))
+            dur = float(seg["duration"])
+            tl_start = timeline_pos
+        else:
+            # V2+: absolute timeline_start, optional source_in
+            if "timeline_start" not in seg:
+                sys.exit(f"Error: V{track_idx} segment missing 'timeline_start': {seg}")
+            tl_start_sec = float(seg["timeline_start"])
+            ss = float(seg.get("source_in", 0))
+            dur = float(seg["duration"])
+            tl_start = sec_to_frames(tl_start_sec)
 
-    src_in = sec_to_frames(ss)
-    dur_frames = sec_to_frames(dur)
-    src_out = src_in + dur_frames
-    tl_start = timeline_pos
-    tl_end = tl_start + dur_frames
-    src_dur_frames = sec_to_frames(meta["duration"])
+        dur_frames = sec_to_frames(dur)
+        src_in = sec_to_frames(ss)
+        src_out = src_in + dur_frames
+        tl_end = tl_start + dur_frames
+        src_dur_frames = sec_to_frames(meta["duration"])
 
-    if src not in file_full_emitted:
-        file_block = file_block_full(src, meta)
-        file_full_emitted.add(src)
-    else:
-        file_block = f'<file id="{xml_escape(fid)}"/>'
+        # IDs: track-1 keeps legacy format ("Foo.mp4 v0") so single-V1 output is
+        # byte-equal to the pre-multitrack tool. Track 2+ uses a track-prefixed
+        # format ("Foo.mp4 v2_0") so V2 reuses of a V1 source don't collide.
+        key = (src, track_idx)
+        inst = instance_counter.get(key, 0)
+        instance_counter[key] = inst + 1
+        if track_idx == 1:
+            vid_id = f"{name} v{inst}"
+            aud_id = f"{name} a{inst}"
+        else:
+            vid_id = f"{name} v{track_idx}_{inst}"
+            aud_id = f"{name} a{track_idx}_{inst}"
+        fid = file_id_for[src]
 
-    v = f"""                    <clipitem id="{xml_escape(vid_id)}">
+        if src not in file_full_emitted:
+            file_block = file_block_full(src, meta)
+            file_full_emitted.add(src)
+        else:
+            file_block = f'<file id="{xml_escape(fid)}"/>'
+
+        # V2+ video clipitems carry NO <link> element. xmeml allows unlinked
+        # clipitems; this avoids any dangling-ref hazard between tracks.
+        if track_idx == 1:
+            link_block = f"""                        <link>
+                            <linkclipref>{xml_escape(vid_id)}</linkclipref>
+                        </link>
+                        <link>
+                            <linkclipref>{xml_escape(aud_id)}</linkclipref>
+                        </link>
+"""
+        else:
+            link_block = ""
+
+        v = f"""                    <clipitem id="{xml_escape(vid_id)}">
                         <name>{xml_escape(name)}</name>
                         <duration>{src_dur_frames}</duration>
                         {RATE_BLOCK}
@@ -518,17 +607,14 @@ for seg in segments:
                         {file_block}
                         <compositemode>normal</compositemode>
 {video_filters(dur_frames)}
-                        <link>
-                            <linkclipref>{xml_escape(vid_id)}</linkclipref>
-                        </link>
-                        <link>
-                            <linkclipref>{xml_escape(aud_id)}</linkclipref>
-                        </link>
-                        <comments/>
+{link_block}                        <comments/>
                     </clipitem>"""
-    video_clips.append(v)
+        video_tracks[track_idx].append(v)
+        all_end_frames.append(tl_end)
+        total_clip_count += 1
 
-    a = f"""                    <clipitem id="{xml_escape(aud_id)}">
+        if track_idx == 1:
+            a = f"""                    <clipitem id="{xml_escape(aud_id)}">
                         <name>{xml_escape(name)}</name>
                         <duration>{src_dur_frames}</duration>
                         {RATE_BLOCK}
@@ -552,11 +638,25 @@ for seg in segments:
                         </link>
                         <comments/>
                     </clipitem>"""
-    audio_clips.append(a)
+            audio_tracks[1].append(a)
+            timeline_pos = tl_end
 
-    timeline_pos = tl_end
+total_dur = max(all_end_frames) if all_end_frames else 0
 
-total_dur = timeline_pos
+# Build one <track> block per video track index, in ascending order
+# (V1 = first/bottom, V2 = second/top in Resolve's video stack).
+video_track_blocks = []
+for tidx in sorted(video_tracks.keys()):
+    clips_str = chr(10).join(video_tracks[tidx])
+    block = f"""                <track>
+{clips_str}
+                    <enabled>TRUE</enabled>
+                    <locked>FALSE</locked>
+                </track>"""
+    video_track_blocks.append(block)
+video_tracks_xml = chr(10).join(video_track_blocks)
+
+audio_clips_str = chr(10).join(audio_tracks.get(1, []))
 
 xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE xmeml>
@@ -575,11 +675,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-8"?>
         </timecode>
         <media>
             <video>
-                <track>
-{chr(10).join(video_clips)}
-                    <enabled>TRUE</enabled>
-                    <locked>FALSE</locked>
-                </track>
+{video_tracks_xml}
                 <format>
                     <samplecharacteristics>
                         <width>{ref["width"]}</width>
@@ -600,7 +696,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-8"?>
             </video>
             <audio>
                 <track>
-{chr(10).join(audio_clips)}
+{audio_clips_str}
                     <enabled>TRUE</enabled>
                     <locked>FALSE</locked>
                 </track>
@@ -616,9 +712,6 @@ else:
     with open(output_path, "w") as f:
         f.write(xml)
 
-# Warn once if any sources lacked embedded TC — likely root cause of future
-# "clips not found" reports from the same user who hit this in v1 of the
-# GEV rough cut (placeholder TCs fail Resolve's TC match).
 if tc_warned:
     print(
         f"warning: {len(tc_warned)} source(s) have no embedded SMPTE timecode; "
@@ -630,5 +723,6 @@ if tc_warned:
 
 if output_path != "-":
     dur_sec = total_dur * FRAMES_PER_SEC_DEN / FRAMES_PER_SEC_NUM
-    print(f"wrote {output_path}  ({len(video_clips)} clips, {dur_sec:.2f}s, timebase={timebase}, ntsc={ntsc_str})")
+    track_summary = ", ".join(f"V{t}={len(video_tracks[t])}" for t in sorted(video_tracks.keys()))
+    print(f"wrote {output_path}  ({total_clip_count} clips [{track_summary}], {dur_sec:.2f}s, timebase={timebase}, ntsc={ntsc_str})")
 PYEOF

@@ -24,7 +24,7 @@ Generate a DaVinci Resolve-compatible timeline (Final Cut Pro 7 XML / xmeml v5) 
 
 ## Input format
 
-Array form — simplest:
+**Array form** — simplest, single video track:
 
 ```json
 [
@@ -34,7 +34,7 @@ Array form — simplest:
 ]
 ```
 
-Object form — lets you set the sequence name in the file:
+**Object form** — lets you set the sequence name in the file:
 
 ```json
 {
@@ -43,12 +43,40 @@ Object form — lets you set the sequence name in the file:
 }
 ```
 
-Fields:
+**Multi-track form** — V1 talking heads + V2 B-roll overlay. Use this when a portion of V1 should be visually replaced by an overlay clip (interview audio plays continuously underneath; V2 video covers V1 video for the overlay window):
+
+```json
+{
+  "name": "My Rough Cut v2",
+  "tracks": {
+    "V1": [
+      {"source": "/abs/interview1.mp4", "start": 57.60, "duration": 12.40, "label": "Beat 1"},
+      {"gap": 0.60},
+      {"source": "/abs/interview2.mp4", "start": 234.84, "duration": 10.16}
+    ],
+    "V2": [
+      {"timeline_start": 2.50, "duration": 7.50, "source": "/abs/broll1.mp4", "source_in": 4.0, "label": "Beat 1 overlay"},
+      {"timeline_start": 14.50, "duration": 7.50, "source": "/abs/broll2.mp4", "source_in": 0.0}
+    ]
+  }
+}
+```
+
+Fields — V1 segment:
 - `source` — absolute path to a video file (MP4, MOV, etc.) readable by ffprobe
 - `start` — seconds into the source where the clip begins (float)
 - `duration` — seconds to take from that source
 - `label` — optional; Resolve ignores it on import but it's useful in the JSON for review
-- `gap` — seconds of empty timeline before the next clip (use sparingly; editors prefer to add room tone themselves)
+- `gap` — seconds of empty timeline before the next clip (use sparingly)
+
+Fields — V2+ overlay segment:
+- `timeline_start` — **absolute** seconds from sequence start where the overlay begins (V2+ does NOT use sequential cursor; positions are explicit)
+- `duration` — seconds the overlay covers
+- `source` — absolute path
+- `source_in` — seconds into the source where the overlay starts (default 0)
+- `label` — optional
+
+V2+ tracks are **video-only** (no linked audio — V1's interview audio plays continuously underneath) and rendered as **full-frame replacement at 100% scale**, not picture-in-picture. `gap` is V1-only — V2+ uses absolute positions instead. Schema currently supports V1 and V2; V3+ would extend the same pattern.
 
 Use absolute paths. Relative paths will confuse Resolve's media linking.
 
