@@ -196,6 +196,45 @@ build_timeline cut.json rough.xml
 echo '[{"source":"/abs/clip.mp4","start":0,"duration":10}]' | build_timeline - -
 ```
 
+For word-precise cuts (no more clipped openers or trailing words on V1 talking heads), pre-process the cut list with `resolve_phrases` — author segments as `{source, phrase, near}` instead of `{source, start, duration}` and let it look up exact word boundaries from the source's `.transcript.words.json`.
+
+---
+
+### `resolve_phrases`
+
+Pre-process a phrase-based JSON cut list into a time-based one ready for `build_timeline`. Each phrase-based segment names the source MP4 plus the verbatim text you want (`phrase`, copied from the source's `.transcript.sentences.json`) and the approximate timestamp (`near`, the start time of the first sentence the phrase touches). The tool reads the matching `.transcript.words.json`, finds the phrase as a contiguous run of word tokens, picks the occurrence closest to `near`, and emits exact word-level `start` / `duration`. Cuts land between words instead of at rounded sentence boundaries — no more clipped opening or trailing words.
+
+```bash
+resolve_phrases [--window SECONDS] <phrases.json> [out.json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--window N` | `10` | Default near-window (half-window, ±N seconds). Per-segment `window` overrides this. |
+
+Phrase-based segment fields:
+
+| Field | Required | Notes |
+|---|---|---|
+| `source` | yes | Absolute path; tool reads `<source-stem>.transcript.words.json` next to it. |
+| `phrase` | yes | Byte-identical to a contiguous span of `.transcript.sentences.json`. Punctuation matters. |
+| `near` | yes | Start time of the first sentence the phrase touches; used to disambiguate repeats. |
+| `window` | no | Per-segment override (half-window, ±seconds). |
+| `label` | no | Passes through. |
+
+Time-based segments (`start/duration`, `timeline_start`, `gap`) and any unknown fields pass through unchanged, so a single cut list can mix phrase-based V1 talking heads with time-based V2 B-roll. Resolution is per-segment; tracks aren't inspected.
+
+```bash
+# Pipe directly into build_timeline:
+resolve_phrases cuts_phrases.json - | build_timeline - rough.xml
+
+# Or stage the resolved cut list as JSON for review first:
+resolve_phrases cuts_phrases.json cuts_resolved.json
+build_timeline cuts_resolved.json rough.xml
+```
+
+Errors are collected across all segments before exiting (so a 16-segment cut list reports every problem at once instead of one per re-run). Each resolved phrase segment carries a `_resolve_phrases` audit field with the original phrase, near, anchor, and a hash of the words.json — the hash lets a re-resolve detect silent transcript regeneration. `build_timeline` ignores the audit field.
+
 ---
 
 ### `/sync-visual` (Claude Code skill)
@@ -212,7 +251,7 @@ Requires [Claude Code](https://claude.ai/code). Invoke with `/sync-visual` in a 
 se-video-tools update
 ```
 
-Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, `build_timeline`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
+Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, `build_timeline`, `resolve_phrases`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
 
 Or update individual tools:
 
@@ -223,6 +262,7 @@ sync_clap update
 elevenlabs_tts update
 transcribe update
 build_timeline update
+resolve_phrases update
 ```
 
 ---
@@ -240,4 +280,5 @@ The installer adds the following skills when Claude Code is detected:
 | `/elevenlabs-tts` | Generate ElevenLabs narration with word/sentence timings |
 | `/transcribe` | Local Whisper transcription with word/sentence timings and interview-vs-b-roll classifier |
 | `/build-timeline` | Generate a DaVinci Resolve-compatible xmeml timeline from a JSON cut list |
+| `/resolve-phrases` | Resolve a phrase-based cut list to exact word-level timings via `.transcript.words.json` |
 | `/se-video-tools` | Update all tools |

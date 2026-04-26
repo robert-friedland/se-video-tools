@@ -317,13 +317,20 @@ else:
 def sec_to_frames(sec):
     return round(sec * FRAMES_PER_SEC_NUM / FRAMES_PER_SEC_DEN)
 
-# ── Source TC normalization: DF semicolons → colons, blank → placeholder ─────
+# ── Source TC normalization ──────────────────────────────────────────────────
+# Drop-frame TC uses a semicolon between seconds and frames (08:37:01;20).
+# Davinci's xmeml import uses the file's <timecode><displayformat> to compute
+# source-in offsets — so DF sources MUST be tagged DF, otherwise the
+# DF/NDF accumulated drift (~1ms per second of TC value) shifts every clip's
+# playback by the source's TC × 0.001 — easily 30+ seconds for wall-clock TCs.
 tc_warned = []
 def normalize_tc(tc, path):
+    """Returns (tc_string, displayformat). Preserves semicolon for DF."""
     if not tc:
         tc_warned.append(path)
-        return "00:00:00:00"
-    return tc.replace(";", ":")
+        return "00:00:00:00", "NDF"
+    is_df = ";" in tc
+    return tc, ("DF" if is_df else "NDF")
 
 # ── File IDs (shared per source across tracks) and per-(source, track) instance counts ─
 file_id_for = {p: f"{os.path.basename(p)} f" for p in unique_sources}
@@ -488,7 +495,7 @@ def audio_filters(dur_frames):
 
 def file_block_full(path, src_meta):
     src_dur_frames = sec_to_frames(src_meta["duration"])
-    tc = normalize_tc(src_meta["timecode"], path)
+    tc, tc_displayformat = normalize_tc(src_meta["timecode"], path)
     fid = file_id_for[path]
     name = os.path.basename(path)
     return f"""<file id="{xml_escape(fid)}">
@@ -498,7 +505,7 @@ def file_block_full(path, src_meta):
                             <pathurl>{pathurl(path)}</pathurl>
                             <timecode>
                                 <string>{tc}</string>
-                                <displayformat>NDF</displayformat>
+                                <displayformat>{tc_displayformat}</displayformat>
                                 {RATE_BLOCK_TC}
                             </timecode>
                             <media>

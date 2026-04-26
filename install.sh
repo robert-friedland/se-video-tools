@@ -109,6 +109,13 @@ chmod +x "$INSTALL_DIR/build_timeline.sh"
 ln -sf "$INSTALL_DIR/build_timeline.sh" "$BREW_BIN/build_timeline"
 echo "✓ build_timeline installed → $BREW_BIN/build_timeline"
 
+# Download resolve_phrases script
+echo "Downloading resolve_phrases..."
+curl -fsSL "${GITHUB_RAW_BASE}/resolve_phrases.sh" -o "$INSTALL_DIR/resolve_phrases.sh"
+chmod +x "$INSTALL_DIR/resolve_phrases.sh"
+ln -sf "$INSTALL_DIR/resolve_phrases.sh" "$BREW_BIN/resolve_phrases"
+echo "✓ resolve_phrases installed → $BREW_BIN/resolve_phrases"
+
 # Download update.sh (top-level update dispatcher)
 echo "Downloading se-video-tools (update dispatcher)..."
 curl -fsSL "${GITHUB_RAW_BASE}/update.sh" -o "$INSTALL_DIR/update.sh"
@@ -143,6 +150,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/build-timeline.md" \
         -o "$SKILL_DIR/build-timeline.md"
     echo "✓ Claude /build-timeline skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/resolve-phrases.md" \
+        -o "$SKILL_DIR/resolve-phrases.md"
+    echo "✓ Claude /resolve-phrases skill installed"
     curl -fsSL "${GITHUB_RAW_BASE}/commands/se-video-tools.md" \
         -o "$SKILL_DIR/se-video-tools.md"
     echo "✓ Claude /se-video-tools skill installed"
@@ -162,5 +172,6 @@ echo "  extract_frames <video> <n> <dir>                # extract N evenly-distr
 echo "  elevenlabs_tts \"text\" [--voice NAME]             # TTS with word/sentence timings (needs ELEVENLABS_API_KEY)"
 echo "  transcribe <video-or-folder>                    # local Whisper STT with word/sentence timings"
 echo "  build_timeline <cut.json> [out.xml]             # generate Resolve xmeml timeline from a JSON cut list"
+echo "  resolve_phrases <phrases.json> [out.json]       # resolve phrase-based cut list to exact word timings via .transcript.words.json"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /build-timeline  /se-video-tools  /organize-onsite  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /build-timeline  /resolve-phrases  /se-video-tools  /organize-onsite  (Claude Code)"

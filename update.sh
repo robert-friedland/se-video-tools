@@ -29,7 +29,8 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
     if [ -d "$HOME/.claude" ]; then
         mkdir -p "$HOME/.claude/commands"
         for cmd in ipad-bezel composite-bezel sync-clap sync-visual analyze-video \
-                   elevenlabs-tts transcribe build-timeline se-video-tools organize-onsite; do
+                   elevenlabs-tts transcribe build-timeline resolve-phrases \
+                   se-video-tools organize-onsite; do
             curl -fsSL "${GITHUB_RAW_BASE}/commands/${cmd}.md" \
                 -o "$HOME/.claude/commands/${cmd}.md" || true
         done
@@ -104,6 +105,20 @@ if [ "$1" = "update" ]; then
         echo "✓ build_timeline bootstrapped"
     fi
     "$SCRIPT_DIR/build_timeline.sh" update || { echo "build_timeline update failed"; exit 1; }
+
+    echo "Updating resolve_phrases..."
+    # Bootstrap: users who installed before resolve_phrases existed don't have the file yet.
+    if [ ! -f "$SCRIPT_DIR/resolve_phrases.sh" ]; then
+        curl -fsSL "${GITHUB_RAW_BASE}/resolve_phrases.sh" -o "$SCRIPT_DIR/resolve_phrases.sh.tmp"
+        [ -s "$SCRIPT_DIR/resolve_phrases.sh.tmp" ] || { echo "resolve_phrases download failed or empty"; rm -f "$SCRIPT_DIR/resolve_phrases.sh.tmp"; exit 1; }
+        grep -q '^#!/bin/bash' "$SCRIPT_DIR/resolve_phrases.sh.tmp" || { echo "resolve_phrases download corrupt"; rm -f "$SCRIPT_DIR/resolve_phrases.sh.tmp"; exit 1; }
+        mv "$SCRIPT_DIR/resolve_phrases.sh.tmp" "$SCRIPT_DIR/resolve_phrases.sh"
+        chmod +x "$SCRIPT_DIR/resolve_phrases.sh"
+        BREW_BIN="$(brew --prefix 2>/dev/null)/bin"
+        [ -d "$BREW_BIN" ] && ln -sf "$SCRIPT_DIR/resolve_phrases.sh" "$BREW_BIN/resolve_phrases"
+        echo "✓ resolve_phrases bootstrapped"
+    fi
+    "$SCRIPT_DIR/resolve_phrases.sh" update || { echo "resolve_phrases update failed"; exit 1; }
 
     echo "All tools updated."
     exit 0

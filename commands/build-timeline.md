@@ -22,6 +22,12 @@ Generate a DaVinci Resolve-compatible timeline (Final Cut Pro 7 XML / xmeml v5) 
 4. Run `build_timeline cut.json rough.xml`.
 5. Tell the user to import `rough.xml` into Resolve via `File → Import → Timeline…`. Resolve will auto-link the source MP4s.
 
+**For word-precise V1 cuts**, author the cut list as `{source, phrase, near}` instead of `{source, start, duration}` and pre-process with `/resolve-phrases` (which reads `.transcript.words.json` and snaps boundaries to actual word edges). Sentence-level Whisper timings round to sentence boundaries that are typically 100–300ms off — enough to clip the leading or trailing word of a quote.
+
+```bash
+resolve_phrases cuts_phrases.json - | build_timeline - rough.xml
+```
+
 ## Input format
 
 **Array form** — simplest, single video track:
