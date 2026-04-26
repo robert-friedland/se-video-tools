@@ -30,7 +30,7 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
         mkdir -p "$HOME/.claude/commands"
         for cmd in ipad-bezel composite-bezel sync-clap sync-visual analyze-video \
                    elevenlabs-tts transcribe build-timeline resolve-phrases \
-                   se-video-tools organize-onsite; do
+                   interview-rough-cut se-video-tools organize-onsite; do
             curl -fsSL "${GITHUB_RAW_BASE}/commands/${cmd}.md" \
                 -o "$HOME/.claude/commands/${cmd}.md" || true
         done
@@ -119,6 +119,20 @@ if [ "$1" = "update" ]; then
         echo "✓ resolve_phrases bootstrapped"
     fi
     "$SCRIPT_DIR/resolve_phrases.sh" update || { echo "resolve_phrases update failed"; exit 1; }
+
+    echo "Updating bridge_broll..."
+    # Bootstrap: users who installed before bridge_broll existed don't have the file yet.
+    if [ ! -f "$SCRIPT_DIR/bridge_broll.sh" ]; then
+        curl -fsSL "${GITHUB_RAW_BASE}/bridge_broll.sh" -o "$SCRIPT_DIR/bridge_broll.sh.tmp"
+        [ -s "$SCRIPT_DIR/bridge_broll.sh.tmp" ] || { echo "bridge_broll download failed or empty"; rm -f "$SCRIPT_DIR/bridge_broll.sh.tmp"; exit 1; }
+        grep -q '^#!/bin/bash' "$SCRIPT_DIR/bridge_broll.sh.tmp" || { echo "bridge_broll download corrupt"; rm -f "$SCRIPT_DIR/bridge_broll.sh.tmp"; exit 1; }
+        mv "$SCRIPT_DIR/bridge_broll.sh.tmp" "$SCRIPT_DIR/bridge_broll.sh"
+        chmod +x "$SCRIPT_DIR/bridge_broll.sh"
+        BREW_BIN="$(brew --prefix 2>/dev/null)/bin"
+        [ -d "$BREW_BIN" ] && ln -sf "$SCRIPT_DIR/bridge_broll.sh" "$BREW_BIN/bridge_broll"
+        echo "✓ bridge_broll bootstrapped"
+    fi
+    "$SCRIPT_DIR/bridge_broll.sh" update || { echo "bridge_broll update failed"; exit 1; }
 
     echo "All tools updated."
     exit 0
