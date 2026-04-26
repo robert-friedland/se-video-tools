@@ -237,6 +237,59 @@ Errors are collected across all segments before exiting (so a 16-segment cut lis
 
 ---
 
+### `bridge_broll`
+
+Pad V1 talking-head cuts and generate a contiguous V2 b-roll track from a per-beat shot plan. Sits between `resolve_phrases` and `build_timeline` in the rough-cut pipeline. Solves two problems that the manual approach gets wrong: (1) word edges clip when V1 cuts are tight, (2) V1 gaps show as black flashes when V2 isn't authored to bridge them.
+
+```bash
+bridge_broll [options] <cut.json> [out.json]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--v1-lead N` | `0.10` | Seconds of pad added before each V1 cut |
+| `--v1-trail N` | `0.20` | Seconds of pad added after each V1 cut |
+| `--v2-head-show N` | `1.0` | Show speaker on V1 for N seconds before V2 starts (beat 1 only) |
+| `--v2-tail-show N` | `0.5` | Leave V1 visible for N seconds at the end |
+| `--v2-clearance N` | `0.34` | Safety margin from each V2 source's end (~10 frames at 29.97; Resolve rejects clips whose source out exceeds the file's frame count) |
+
+Input is the multi-track shape with two top-level extras:
+
+```json
+{
+  "name": "Customer Rough Cut",
+  "tracks": {
+    "V1": [
+      {"source": "/abs/iv1.mp4", "start": 88.83, "duration": 12.49, "label": "Beat 1"},
+      {"gap": 0.4},
+      {"source": "/abs/iv2.mp4", "start": 128.90, "duration": 11.18, "label": "Beat 2"}
+    ]
+  },
+  "v2_plan": [
+    [
+      {"source": "/abs/broll1.mp4", "source_in": 0.0, "label": "ui shot"},
+      {"source": "/abs/broll2.mp4", "source_in": 0.0, "label": "context"}
+    ],
+    [
+      {"source": "/abs/broll3.mp4", "source_in": 0.0, "label": "feature in use"}
+    ]
+  ]
+}
+```
+
+`v2_plan` is parallel to V1 non-gap entries — one shot list per beat, in order. Use `[]` for a beat you intentionally want to leave on the talking head. Each shot is `{source, source_in?, label?}`.
+
+Output is the same JSON with V1 padded in place and V2 populated with `{timeline_start, duration, source, source_in, label}` per shot — pipe straight into `build_timeline`.
+
+```bash
+# Full rough-cut pipeline:
+resolve_phrases cuts.json - | bridge_broll - | build_timeline - rough.xml
+```
+
+Behavior: V2 segments transition at the midpoint of each V1 gap so V1 gaps are fully covered. Within each beat, shots are distributed proportionally to fill the V2 span; each shot is capped by `source_dur − source_in − v2_clearance`. If a shot caps, leftover time is redistributed to uncapped shots in the same beat. If a beat's source budget is below its V2 span, the tool exits with a clear error naming the beat and the deficit.
+
+---
+
 ### `/sync-visual` (Claude Code skill)
 
 Interactively syncs two videos when there is no clap — or when you want to sync on a specific on-screen event. Claude extracts frames in a coarse-to-fine sweep, visually identifies the matching event in both clips, and outputs `--bg-start` / `--scr-start` offsets. Expect several rounds of frame extraction and review before a final offset is produced.
@@ -251,7 +304,7 @@ Requires [Claude Code](https://claude.ai/code). Invoke with `/sync-visual` in a 
 se-video-tools update
 ```
 
-Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, `build_timeline`, `resolve_phrases`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
+Updates `ipad_bezel`, `composite_bezel`, `sync_clap`, `extract_frames`, `elevenlabs_tts`, `transcribe`, `build_timeline`, `resolve_phrases`, `bridge_broll`, and the `se-video-tools` dispatcher. Also refreshes Claude Code skills when the `~/.claude/commands` directory is present.
 
 Or update individual tools:
 
@@ -263,6 +316,7 @@ elevenlabs_tts update
 transcribe update
 build_timeline update
 resolve_phrases update
+bridge_broll update
 ```
 
 ---
@@ -281,4 +335,5 @@ The installer adds the following skills when Claude Code is detected:
 | `/transcribe` | Local Whisper transcription with word/sentence timings and interview-vs-b-roll classifier |
 | `/build-timeline` | Generate a DaVinci Resolve-compatible xmeml timeline from a JSON cut list |
 | `/resolve-phrases` | Resolve a phrase-based cut list to exact word-level timings via `.transcript.words.json` |
+| `/interview-rough-cut` | End-to-end playbook: transcribe → pick quotes → bridge b-roll → emit Resolve xmeml |
 | `/se-video-tools` | Update all tools |

@@ -11,6 +11,8 @@ CLI tools for compositing iPad screen recordings over real-life background video
 - **`elevenlabs_tts.sh`** — ElevenLabs TTS with char/word/sentence timings; outputs mp3 + json + words/sentences SRTs
 - **`transcribe.sh`** — local whisper.cpp transcription; word/sentence timings + interview classifier
 - **`build_timeline.sh`** — JSON cut list → DaVinci Resolve-compatible Final Cut Pro 7 XML (xmeml v5). ffprobes each source for frame rate, resolution, audio channels, and embedded SMPTE timecode. Timecode round-trip is the critical constraint: Resolve validates `<file><timecode>` against the media's real embedded TC, so placeholder `00:00:00:00` breaks import when the source actually carries a TC. FCPXML 1.10 is rejected by Resolve — do not substitute.
+- **`resolve_phrases.sh`** — phrase-based JSON cut list → time-based JSON. Reads `.transcript.words.json` next to each source, finds the verbatim phrase as a contiguous run of word tokens, picks the occurrence closest to `near`, emits exact word-level `start`/`duration`. Pipes into `build_timeline`.
+- **`bridge_broll.sh`** — pad V1 cuts and generate a contiguous V2 b-roll track from a per-beat shot plan. Sits between `resolve_phrases` and `build_timeline`. V2 segments transition at the midpoint of each V1 gap so gaps are fully covered. Within each beat, shots distribute proportionally and are capped by `source_dur − source_in − v2_clearance`. Errors loudly when a beat's source budget is below its V2 span.
 
 ## Environment variables
 
