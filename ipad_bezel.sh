@@ -1,13 +1,13 @@
 #!/bin/bash
-# iPad mini bezel overlay (GPU-accelerated via composite_bezel_gpu)
-# Usage: ipad_bezel [--bg black|greenscreen|0xRRGGBB] input.mp4 [output.mp4]
+# iPad bezel overlay (GPU-accelerated via composite_bezel_gpu).
+# Auto-detects iPad model (mini or A16) from input video dimensions.
+# Usage: ipad_bezel [--ipad mini|a16] [--bg black|greenscreen|0xRRGGBB] input.mp4 [output.mp4]
 #        ipad_bezel update
 
 set -e
 
 # Resolve real script location through symlinks (BASH_SOURCE[0] may be a symlink in homebrew/bin)
 SCRIPT_DIR="$(cd "$(dirname "$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")")" && pwd)"
-BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
 
 # Set this to your GitHub repo's raw URL once the repo is pushed
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/robert-friedland/se-video-tools/main"
@@ -21,6 +21,8 @@ if [ "$1" = "update" ]; then
     mkdir -p "$SCRIPT_DIR/assets"
     curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
         -o "$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
+    curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20%28A16%29%20-%20Silver%20-%20Portrait.png" \
+        -o "$SCRIPT_DIR/assets/iPad (A16) - Silver - Portrait.png"
     rm -f "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
     BINARY_URL="https://github.com/robert-friedland/se-video-tools/releases/latest/download/composite_bezel_gpu"
     curl -fL "$BINARY_URL" -o "$SCRIPT_DIR/composite_bezel_gpu" 2>/dev/null && {
@@ -53,19 +55,47 @@ fi
 # Use --bg greenscreen for a chroma-key green you can key out in Resolve
 BG_COLOR="black"
 DURATION_OVERRIDE=""
+IPAD_OVERRIDE=""
 
 POSITIONALS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --bg)       BG_COLOR="$2"; shift 2 ;;
         --duration) DURATION_OVERRIDE="$2"; shift 2 ;;
+        --ipad)     IPAD_OVERRIDE="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--bg black|greenscreen|0xRRGGBB] [--duration N] input.mp4 [output.mp4]"
+            echo "Usage: $0 [--ipad mini|a16] [--bg black|greenscreen|0xRRGGBB] [--duration N] input.mp4 [output.mp4]"
             exit 1 ;;
         *) POSITIONALS+=("$1"); shift ;;
     esac
 done
+
+# Bezel specs — must mirror BezelSpec.knownSpecs in DimensionCalc.swift.
+pick_bezel_for_model() {
+    local model="$1"
+    case "$model" in
+        mini) BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png" ;;
+        a16)  BEZEL="$SCRIPT_DIR/assets/iPad (A16) - Silver - Portrait.png" ;;
+        *) echo "Error: --ipad must be one of: mini, a16 (got: $model)" >&2; return 1 ;;
+    esac
+}
+
+# Auto-detect iPad model from input dims by long/short ratio.
+detect_ipad_model() {
+    local w="$1" h="$2"
+    python3 - "$w" "$h" <<'PYEOF'
+import sys
+w, h = int(sys.argv[1]), int(sys.argv[2])
+r = max(w, h) / min(w, h)
+candidates = [("mini", 1.5228), ("a16", 1.4390)]
+best = min(candidates, key=lambda c: abs(r - c[1]) / c[1])
+err = abs(r - best[1]) / best[1]
+if err > 0.02:
+    sys.exit(2)
+print(best[0])
+PYEOF
+}
 
 if [ "$BG_COLOR" = "greenscreen" ]; then
     BG_COLOR="0x00B140"
@@ -91,7 +121,7 @@ if [ ! -f "$INPUT" ]; then
     exit 1
 fi
 
-# Probe input: bitrate and duration
+# Probe input: bitrate, duration, and effective dimensions (for model detection)
 INPUT_BITRATE=$(ffprobe -v error -select_streams v:0 \
     -show_entries stream=bit_rate -of csv=p=0 "$INPUT" 2>/dev/null | tr -d ',')
 if [ -z "$INPUT_BITRATE" ] || [ "$INPUT_BITRATE" = "N/A" ]; then
@@ -100,6 +130,53 @@ if [ -z "$INPUT_BITRATE" ] || [ "$INPUT_BITRATE" = "N/A" ]; then
 fi
 if [ -z "$INPUT_BITRATE" ] || [ "$INPUT_BITRATE" = "N/A" ]; then
     INPUT_BITRATE=8000000
+fi
+
+read -r INPUT_W INPUT_H INPUT_ROTATION < <(python3 - "$INPUT" <<'PYEOF'
+import sys, json, subprocess
+result = subprocess.run(
+    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+     "-show_entries", "stream=width,height:stream_side_data=rotation",
+     "-print_format", "json", sys.argv[1]],
+    capture_output=True, text=True
+)
+d = json.loads(result.stdout)["streams"][0]
+rotation = 0
+for sd in d.get("side_data_list", []):
+    if "rotation" in sd:
+        rotation = int(sd["rotation"]); break
+print(d["width"], d["height"], rotation)
+PYEOF
+)
+
+if [ "$INPUT_ROTATION" = "-90" ] || [ "$INPUT_ROTATION" = "90" ] || \
+   [ "$INPUT_ROTATION" = "270" ] || [ "$INPUT_ROTATION" = "-270" ]; then
+    INPUT_EFF_W=$INPUT_H; INPUT_EFF_H=$INPUT_W
+else
+    INPUT_EFF_W=$INPUT_W; INPUT_EFF_H=$INPUT_H
+fi
+
+# ── Pick bezel (manual override or auto-detect from input dims) ───────────────
+if [ -n "$IPAD_OVERRIDE" ]; then
+    pick_bezel_for_model "$IPAD_OVERRIDE" || exit 1
+    IPAD_MODEL="$IPAD_OVERRIDE"
+    echo "iPad model: ${IPAD_MODEL} (--ipad override)"
+else
+    if IPAD_MODEL=$(detect_ipad_model "$INPUT_EFF_W" "$INPUT_EFF_H"); then
+        pick_bezel_for_model "$IPAD_MODEL"
+        echo "iPad model: ${IPAD_MODEL} (auto-detected from ${INPUT_EFF_W}x${INPUT_EFF_H})"
+    else
+        echo "Error: input dimensions ${INPUT_EFF_W}x${INPUT_EFF_H} don't match a known iPad model." >&2
+        echo "  Expected long/short ratios: iPad mini=1.5228, iPad A16=1.4390 (±2%)" >&2
+        echo "  Pass --ipad mini or --ipad a16 to override." >&2
+        exit 1
+    fi
+fi
+
+if [ ! -f "$BEZEL" ]; then
+    echo "Error: bezel asset not found: $BEZEL" >&2
+    echo "  Run 'ipad_bezel update' to fetch missing assets." >&2
+    exit 1
 fi
 
 FULL_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)

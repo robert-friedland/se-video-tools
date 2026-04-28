@@ -93,7 +93,7 @@ Deterministic rules first. Only fall back to visual inspection (spawn parallel `
 
 **iPad screen recording** (strong signals):
 - `tags.com.apple.quicktime.software` contains `iOS` / ReplayKit, or `major_brand=qt`
-- Logical dimensions match an iPad mini recording: commonly encoded as 1920×1260 / 1260×1920, or 2266×1488 / 1488×2266
+- Logical dimensions match an iPad recording — iPad mini: 1920×1260 / 1260×1920 or 2266×1488 / 1488×2266; iPad A16: 2360×1640 / 1640×2360
 - No DJI metadata
 
 **DJI 3rd-person**:

@@ -42,6 +42,8 @@ curl -fsSL "${GITHUB_RAW_BASE}/ipad_bezel.sh" -o "$INSTALL_DIR/ipad_bezel.sh"
 mkdir -p "$INSTALL_DIR/assets"
 curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
     -o "$INSTALL_DIR/assets/iPad mini - Starlight - Portrait.png"
+curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20%28A16%29%20-%20Silver%20-%20Portrait.png" \
+    -o "$INSTALL_DIR/assets/iPad (A16) - Silver - Portrait.png"
 rm -f "$INSTALL_DIR/iPad mini - Starlight - Portrait.png"
 chmod +x "$INSTALL_DIR/ipad_bezel.sh"
 

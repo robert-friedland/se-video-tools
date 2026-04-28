@@ -221,11 +221,11 @@ final class Compositor: @unchecked Sendable {
                 ])
 
                 // Center screen on transparent bezel canvas
-                let centeredXOff   = (CGFloat(DimensionCalc.bezelW) - scaledScrW) / 2
-                let centeredYOffCI = (CGFloat(DimensionCalc.bezelH) - scaledScrH) / 2
+                let centeredXOff   = (CGFloat(d.bezelW) - scaledScrW) / 2
+                let centeredYOffCI = (CGFloat(d.bezelH) - scaledScrH) / 2
 
                 let canvas = CIImage(color: .clear).cropped(
-                    to: CGRect(x: 0, y: 0, width: DimensionCalc.bezelW, height: DimensionCalc.bezelH)
+                    to: CGRect(x: 0, y: 0, width: d.bezelW, height: d.bezelH)
                 )
                 let scrOnCanvas = scrCI
                     .transformed(by: CGAffineTransform(
@@ -530,12 +530,12 @@ final class Compositor: @unchecked Sendable {
                 ])
 
                 // Center the fit content within the bezel canvas (CIImage Y-up)
-                let centeredXOff   = (CGFloat(DimensionCalc.bezelW) - scaledScrW) / 2
-                let centeredYOffCI = (CGFloat(DimensionCalc.bezelH) - scaledScrH) / 2
+                let centeredXOff   = (CGFloat(d.bezelW) - scaledScrW) / 2
+                let centeredYOffCI = (CGFloat(d.bezelH) - scaledScrH) / 2
 
                 // Place screen onto transparent bezel-sized canvas
                 let canvas = CIImage(color: .clear).cropped(
-                    to: CGRect(x: 0, y: 0, width: DimensionCalc.bezelW, height: DimensionCalc.bezelH)
+                    to: CGRect(x: 0, y: 0, width: d.bezelW, height: d.bezelH)
                 )
                 let scrOnCanvas = scrCI
                     .transformed(by: CGAffineTransform(
