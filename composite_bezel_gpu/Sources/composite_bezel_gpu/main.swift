@@ -2,6 +2,7 @@ import AVFoundation
 import ArgumentParser
 import CoreMedia
 import Foundation
+import ImageIO
 
 struct CompositeBezelGPU: ParsableCommand {
 
@@ -56,7 +57,7 @@ struct CompositeBezelGPU: ParsableCommand {
     // ── Solid background mode ───────────────────────────────────────────────────
     @Option(
         name: .customLong("bg-color"),
-        help: "Solid background color as 6-digit hex (e.g. 000000). Use instead of a background video; output will be bezel canvas size 1780x2550."
+        help: "Solid background color as 6-digit hex (e.g. 000000). Use instead of a background video; output is the bezel canvas size (varies by model)."
     )
     var bgColor: String?
 
@@ -88,9 +89,18 @@ struct CompositeBezelGPU: ParsableCommand {
             throw ValidationError("Bezel file not found: \(bezel)")
         }
 
+        // Discriminate iPad model by bezel PNG pixel size.
+        let (bezelImgW, bezelImgH) = try Self.readImagePixelSize(url: bezelURL)
+        guard let bezelSpec = BezelSpec.match(width: bezelImgW, height: bezelImgH) else {
+            throw ValidationError(
+                "Unrecognized bezel size \(bezelImgW)x\(bezelImgH) for \(bezel). " +
+                "Known sizes: \(BezelSpec.describeKnown())."
+            )
+        }
+
         // ── Solid background mode ──────────────────────────────────────────────
         if let bgColorHex = bgColor {
-            try runSolidMode(bgColorHex: bgColorHex, bezelURL: bezelURL)
+            try runSolidMode(bgColorHex: bgColorHex, bezelURL: bezelURL, bezelSpec: bezelSpec)
             return
         }
 
@@ -176,6 +186,7 @@ struct CompositeBezelGPU: ParsableCommand {
         let totalFrames = max(1, Int(fps * activeDuration + 0.5))
 
         let dims = DimensionCalc(
+            bezel:        bezelSpec,
             bgEffW:       Int(finalBgEffSize.width),
             bgEffH:       Int(finalBgEffSize.height),
             outputWidth:  outputWidth,
@@ -223,7 +234,7 @@ struct CompositeBezelGPU: ParsableCommand {
     }
 
     // ── Solid background mode ────────────────────────────────────────────────────
-    private func runSolidMode(bgColorHex: String, bezelURL: URL) throws {
+    private func runSolidMode(bgColorHex: String, bezelURL: URL, bezelSpec: BezelSpec) throws {
         // In solid mode, `background` holds the screen recording path
         let scrURL = URL(fileURLWithPath: background)
         guard FileManager.default.fileExists(atPath: scrURL.path) else {
@@ -289,10 +300,11 @@ struct CompositeBezelGPU: ParsableCommand {
 
         let outputBitrate = bitrate ?? max(500_000, Int(Double(scrBitrate) * 0.6))
 
-        // Solid mode: output IS the bezel canvas (1780×2550), iPad fills the frame
+        // Solid mode: output IS the bezel canvas (size varies by model), iPad fills the frame
         let dims = DimensionCalc(
-            bgEffW:       DimensionCalc.bezelW,
-            bgEffH:       DimensionCalc.bezelH,
+            bezel:        bezelSpec,
+            bgEffW:       bezelSpec.bezelW,
+            bgEffH:       bezelSpec.bezelH,
             outputWidth:  nil,
             overlayScale: 1.0,
             margin:       0,
@@ -338,6 +350,16 @@ struct CompositeBezelGPU: ParsableCommand {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
+
+    private static func readImagePixelSize(url: URL) throws -> (Int, Int) {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int else {
+            throw ValidationError("Failed to read image dimensions: \(url.path)")
+        }
+        return (w, h)
+    }
 
     private func effectiveSize(naturalSize: CGSize, transform: CGAffineTransform) -> CGSize {
         let angle = atan2(transform.b, transform.a)

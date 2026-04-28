@@ -4,6 +4,9 @@
 # Usage: composite_bezel [OPTIONS] background.mp4 screen.mp4 [output.mp4]
 #        composite_bezel update
 #
+# Bezel selection (auto-detected from screen recording aspect ratio):
+#   --ipad mini|a16       force iPad model instead of auto-detecting
+#
 # Overlay options:
 #   --overlay-scale 0.7   iPad height as fraction of background height (default: 0.7)
 #   --x N                 X pixel position of overlay (default: right side minus --margin)
@@ -22,7 +25,6 @@ set -e
 
 # Resolve real script location through symlinks (BASH_SOURCE[0] may be a symlink in homebrew/bin)
 SCRIPT_DIR="$(cd "$(dirname "$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")")" && pwd)"
-BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
 
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/robert-friedland/se-video-tools/main"
 
@@ -37,6 +39,8 @@ if [ "$1" = "update" ]; then
     mkdir -p "$SCRIPT_DIR/assets"
     curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20mini%20-%20Starlight%20-%20Portrait.png" \
         -o "$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
+    curl -fsSL "${GITHUB_RAW_BASE}/assets/iPad%20%28A16%29%20-%20Silver%20-%20Portrait.png" \
+        -o "$SCRIPT_DIR/assets/iPad (A16) - Silver - Portrait.png"
     rm -f "$SCRIPT_DIR/iPad mini - Starlight - Portrait.png"
     if [ -d "$HOME/.claude/commands" ]; then
         curl -fsSL "${GITHUB_RAW_BASE}/commands/composite-bezel.md" \
@@ -86,6 +90,7 @@ AUDIO_MODE="both"  # both | bg | screen | none
 OUTPUT_WIDTH=""
 BG_ROTATION_OVERRIDE=""
 SCR_ROTATION_OVERRIDE=""
+IPAD_OVERRIDE=""
 
 # Parse args — flags may appear anywhere (before or after positionals)
 POSITIONALS=()
@@ -103,9 +108,10 @@ while [ $# -gt 0 ]; do
         --output-width)  OUTPUT_WIDTH="$2";    shift 2 ;;
         --bg-rotation)   BG_ROTATION_OVERRIDE="$2";  shift 2 ;;
         --scr-rotation)  SCR_ROTATION_OVERRIDE="$2"; shift 2 ;;
+        --ipad)          IPAD_OVERRIDE="$2"; shift 2 ;;
         --*)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--overlay-scale 0.7] [--x N] [--y N] [--margin 40] [--bg-start N] [--scr-start N] [--duration N] background.mp4 screen.mp4 [output.mp4]"
+            echo "Usage: $0 [--ipad mini|a16] [--overlay-scale 0.7] [--x N] [--y N] [--margin 40] [--bg-start N] [--scr-start N] [--duration N] background.mp4 screen.mp4 [output.mp4]"
             exit 1 ;;
         *) POSITIONALS+=("$1"); shift ;;
     esac
@@ -130,15 +136,43 @@ if [ ! -f "$SCR" ]; then
     exit 1
 fi
 
-# Bezel canvas dimensions (1780x2550)
-BEZEL_W=1780
-BEZEL_H=2550
+# Bezel specs — must mirror BezelSpec.knownSpecs in DimensionCalc.swift.
+# Sets BEZEL, BEZEL_W, BEZEL_H, CUTOUT_W, CUTOUT_H, INFLATE for the requested model.
+pick_bezel_for_model() {
+    local model="$1"
+    case "$model" in
+        mini)
+            BEZEL="$SCRIPT_DIR/assets/iPad mini - Starlight - Portrait.png"
+            BEZEL_W=1780; BEZEL_H=2550
+            CUTOUT_W=1488; CUTOUT_H=2266
+            INFLATE=4
+            ;;
+        a16)
+            BEZEL="$SCRIPT_DIR/assets/iPad (A16) - Silver - Portrait.png"
+            BEZEL_W=2040; BEZEL_H=2760
+            CUTOUT_W=1639; CUTOUT_H=2360
+            INFLATE=4
+            ;;
+        *) echo "Error: --ipad must be one of: mini, a16 (got: $model)" >&2; return 1 ;;
+    esac
+}
 
-# Scale factor: screen content occupies 89% of the bezel canvas (matches ipad_bezel.sh / Resolve workflow)
-SCALE=0.89
-
-IPAD_RATIO=0.6567
-RATIO_TOLERANCE=0.05
+# Auto-detect iPad model from a recording's effective dims by long/short ratio.
+# Prints "mini" or "a16" on stdout; exits 2 if no model is within 2% tolerance.
+detect_ipad_model() {
+    local w="$1" h="$2"
+    python3 - "$w" "$h" <<'PYEOF'
+import sys
+w, h = int(sys.argv[1]), int(sys.argv[2])
+r = max(w, h) / min(w, h)
+candidates = [("mini", 1.5228), ("a16", 1.4390)]
+best = min(candidates, key=lambda c: abs(r - c[1]) / c[1])
+err = abs(r - best[1]) / best[1]
+if err > 0.02:
+    sys.exit(2)
+print(best[0])
+PYEOF
+}
 
 # ── Probe background video ────────────────────────────────────────────────────
 read -r BG_W BG_H BG_BITRATE BG_ROTATION < <(python3 - "$BG" <<'PYEOF'
@@ -225,16 +259,27 @@ else
     SCR_EFF_H=$SCR_H
 fi
 
-# Validate screen recording aspect ratio (iPad mini portrait ~0.6567)
-VALID_RATIO=$(python3 -c "
-ratio = $SCR_EFF_W / $SCR_EFF_H
-expected = $IPAD_RATIO
-diff = abs(ratio - expected) / expected
-print('true' if diff <= $RATIO_TOLERANCE else 'false')
-")
+# ── Pick bezel (manual override or auto-detect from screen recording) ─────────
+if [ -n "$IPAD_OVERRIDE" ]; then
+    pick_bezel_for_model "$IPAD_OVERRIDE" || exit 1
+    IPAD_MODEL="$IPAD_OVERRIDE"
+    echo "iPad model:      ${IPAD_MODEL} (--ipad override)"
+else
+    if IPAD_MODEL=$(detect_ipad_model "$SCR_EFF_W" "$SCR_EFF_H"); then
+        pick_bezel_for_model "$IPAD_MODEL"
+        echo "iPad model:      ${IPAD_MODEL} (auto-detected from ${SCR_EFF_W}x${SCR_EFF_H})"
+    else
+        echo "Error: screen recording dimensions ${SCR_EFF_W}x${SCR_EFF_H} don't match a known iPad model." >&2
+        echo "  Expected long/short ratios: iPad mini=1.5228, iPad A16=1.4390 (±2%)" >&2
+        echo "  Pass --ipad mini or --ipad a16 to override." >&2
+        exit 1
+    fi
+fi
 
-if [ "$VALID_RATIO" = "false" ]; then
-    echo "Warning: screen recording effective dimensions ${SCR_EFF_W}x${SCR_EFF_H} (ratio $(python3 -c "print(round($SCR_EFF_W/$SCR_EFF_H,3))")) don't match iPad mini portrait (expected ~${IPAD_RATIO} ±${RATIO_TOLERANCE}) (continuing)" >&2
+if [ ! -f "$BEZEL" ]; then
+    echo "Error: bezel asset not found: $BEZEL" >&2
+    echo "  Run 'composite_bezel update' to fetch missing assets." >&2
+    exit 1
 fi
 
 # ── Calculate dimensions ──────────────────────────────────────────────────────
@@ -248,9 +293,10 @@ else
     OUT_H=$BG_EFF_H
 fi
 
-# Screen area within bezel canvas (89% of bezel, even integers)
-SCREEN_W=$(python3 -c "print(round($BEZEL_W * $SCALE / 2) * 2)")
-SCREEN_H=$(python3 -c "print(round($BEZEL_H * $SCALE / 2) * 2)")
+# Screen area within bezel canvas: cutout + 2*inflate, even integers
+# (mirrors DimensionCalc init in Swift)
+SCREEN_W=$(( (CUTOUT_W + 2 * INFLATE) / 2 * 2 ))
+SCREEN_H=$(( (CUTOUT_H + 2 * INFLATE) / 2 * 2 ))
 X_OFF=$(( (BEZEL_W - SCREEN_W) / 2 ))
 Y_OFF=$(( (BEZEL_H - SCREEN_H) / 2 ))
 

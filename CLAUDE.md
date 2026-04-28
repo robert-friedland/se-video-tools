@@ -58,11 +58,16 @@ Two-pass pipeline:
 
 Key coordinate system note: `AVAssetTrack.preferredTransform` is UIKit (Y-down). CIImage is Y-up. For 90°/270° rotations, applying UIKit transforms directly in CIImage space produces a 180° error — `applyRotation()` compensates via `atan2` detection. `applyExplicitRotation()` is used when `--bg-rotation`/`--scr-rotation` overrides are given (no Y-axis conversion needed).
 
-## Bezel PNG
+## Bezel PNGs
 
-- File: `iPad mini - Starlight - Portrait.png` (1780×2550px)
-- Screen opening: x=146..1634, y=142..2408 (CIImage Y-up coords), 1488×2266px
-- `DimensionCalc.bezelW/H = 1780/2550`, `scale = 0.89`
+Both shell scripts auto-detect the iPad model from screen-recording aspect ratio (long/short, ±2%) and pick the matching bezel; `--ipad mini|a16` overrides. Swift binary loads the PNG and looks up `BezelSpec` by pixel size — the PNG dimensions are the discriminator.
+
+| Model    | PNG                                       | Bezel size | Cutout (top-left) | Cutout size | Long/short |
+|----------|-------------------------------------------|------------|-------------------|-------------|------------|
+| iPad mini| `iPad mini - Starlight - Portrait.png`    | 1780×2550  | x=146, y=142      | 1488×2266   | 1.5228     |
+| iPad A16 | `iPad (A16) - Silver - Portrait.png`      | 2040×2760  | x=200, y=200      | 1639×2360   | 1.4390     |
+
+`BezelSpec.knownSpecs` in `DimensionCalc.swift` is the authoritative table — adding a new bezel = one entry plus the PNG in `assets/`. Each spec includes `inflate=4` px of seam-hiding slop hidden behind the bezel chassis (replaces the legacy `scale=0.89` magic constant).
 
 ## Performance
 

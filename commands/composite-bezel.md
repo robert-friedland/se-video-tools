@@ -1,4 +1,4 @@
-Composite a screen recording (with iPad mini bezel, floating transparently) over real-life background footage, producing a single MP4 ready for editing in DaVinci Resolve.
+Composite a screen recording (with iPad bezel — mini or A16, auto-detected — floating transparently) over real-life background footage, producing a single MP4 ready for editing in DaVinci Resolve.
 
 ## Your job when this skill is invoked
 
@@ -47,12 +47,15 @@ Optional flags:
 - `--bg-rotation 0|90|180|270` — override the background rotation in degrees CW (auto-detected from track metadata if omitted)
 - `--scr-rotation 0|90|180|270` — override the screen recording rotation in degrees CW (auto-detected from track metadata if omitted)
 
+**Bezel selection:**
+- `--ipad mini|a16` — force iPad model. Default is auto-detection from the screen recording's long/short aspect ratio (mini=1.5228, A16=1.4390, ±2%).
+
 **Performance:**
 - `--jobs N` — accepted for compatibility but ignored (GPU uses a single-pass pipeline).
 
 ## Key facts
 
-- The screen recording must be a portrait iPad mini recording. Aspect ratio is validated automatically.
+- The screen recording must be a portrait iPad recording (mini or A16, auto-detected by aspect ratio). Pass `--ipad mini` or `--ipad a16` to override detection. Non-iPad footage is rejected with a clear error.
 - The background should be landscape footage. A warning is shown if it is not.
 - The bezeled iPad floats transparently over the background — no solid color box around it.
 - Rotation is auto-detected from track metadata for both inputs. Use `--bg-rotation` / `--scr-rotation` only if the output looks rotated or upside-down.
