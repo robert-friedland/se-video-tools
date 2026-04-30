@@ -30,7 +30,7 @@ if [ "$1" = "update" ] && [ "${_SE_UPDATED:-}" != "1" ]; then
         mkdir -p "$HOME/.claude/commands"
         for cmd in ipad-bezel composite-bezel sync-clap sync-visual analyze-video \
                    elevenlabs-tts transcribe build-timeline resolve-phrases \
-                   interview-rough-cut se-video-tools organize-onsite; do
+                   interview-rough-cut se-video-tools organize-onsite sizzle; do
             curl -fsSL "${GITHUB_RAW_BASE}/commands/${cmd}.md" \
                 -o "$HOME/.claude/commands/${cmd}.md" || true
         done
