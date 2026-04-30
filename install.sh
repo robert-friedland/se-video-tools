@@ -169,6 +169,9 @@ if [ -d "$HOME/.claude" ]; then
     curl -fsSL "${GITHUB_RAW_BASE}/commands/organize-onsite.md" \
         -o "$SKILL_DIR/organize-onsite.md"
     echo "✓ Claude /organize-onsite skill installed"
+    curl -fsSL "${GITHUB_RAW_BASE}/commands/sizzle.md" \
+        -o "$SKILL_DIR/sizzle.md"
+    echo "✓ Claude /sizzle skill installed"
 else
     echo "  Claude Code not detected — skipping skill install"
 fi
@@ -185,4 +188,4 @@ echo "  build_timeline <cut.json> [out.xml]             # generate Resolve xmeml
 echo "  resolve_phrases <phrases.json> [out.json]       # resolve phrase-based cut list to exact word timings via .transcript.words.json"
 echo "  bridge_broll <cut.json> [out.json]              # pad V1 cuts and generate contiguous V2 b-roll from a per-beat shot plan"
 echo "  se-video-tools update                           # update all tools at once"
-echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /build-timeline  /resolve-phrases  /interview-rough-cut  /se-video-tools  /organize-onsite  (Claude Code)"
+echo "  /ipad-bezel  /composite-bezel  /sync-clap  /sync-visual  /analyze-video  /elevenlabs-tts  /transcribe  /build-timeline  /resolve-phrases  /interview-rough-cut  /se-video-tools  /organize-onsite  /sizzle  (Claude Code)"

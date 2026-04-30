@@ -68,6 +68,27 @@ resolve_phrases cuts_phrases.json - | build_timeline - rough.xml
 }
 ```
 
+**With explicit audio** — V1 visuals + a separate narration track on A1. Use this for AI-narrated sizzle reels where V1 is purely visual (composites + b-roll) and the narration is its own audio file:
+
+```json
+{
+  "name": "Sizzle (AI narration)",
+  "tracks": {
+    "V1": [
+      {"source": "/abs/composite.mp4", "start": 0.0, "duration": 6.4, "label": "Sentence 1"},
+      {"source": "/abs/broll/lobby.mp4", "start": 0.0, "duration": 4.2, "label": "Sentence 2"}
+    ]
+  },
+  "audio": {
+    "A1": [
+      {"timeline_start": 0.0, "duration": 10.6, "source": "/abs/narration.mp3", "source_in": 0.0}
+    ]
+  }
+}
+```
+
+When the `audio` block is present, V1's implicit audio is **muted** — the timeline's audio is exactly what's in the `audio` block. When `audio` is absent, V1 video clipitems carry their own linked audio onto a single audio track (current behavior, unchanged).
+
 Fields — V1 segment:
 - `source` — absolute path to a video file (MP4, MOV, etc.) readable by ffprobe
 - `start` — seconds into the source where the clip begins (float)
@@ -80,6 +101,13 @@ Fields — V2+ overlay segment:
 - `duration` — seconds the overlay covers
 - `source` — absolute path
 - `source_in` — seconds into the source where the overlay starts (default 0)
+- `label` — optional
+
+Fields — `audio.A1+` segment:
+- `timeline_start` — **absolute** seconds from sequence start (audio tracks use absolute positions, no sequential cursor)
+- `duration` — seconds the audio covers
+- `source` — absolute path to an audio file (mp3, wav, m4a, etc.) readable by ffprobe. Audio sources are **excluded** from the frame-rate / resolution mismatch checks (they have no video stream).
+- `source_in` — seconds into the source where the segment begins (default 0)
 - `label` — optional
 
 V2+ tracks are **video-only** (no linked audio — V1's interview audio plays continuously underneath) and rendered as **full-frame replacement at 100% scale**, not picture-in-picture. `gap` is V1-only — V2+ uses absolute positions instead. Schema currently supports V1 and V2; V3+ would extend the same pattern.

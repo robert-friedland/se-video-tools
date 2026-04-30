@@ -33,6 +33,11 @@
 #         "V2": [
 #           {"timeline_start": 2.5, "duration": 7.5, "source": "/abs/broll.mp4", "source_in": 4.0}
 #         ]
+#       },
+#       "audio": {
+#         "A1": [
+#           {"timeline_start": 0.0, "duration": 60.0, "source": "/abs/narration.mp3", "source_in": 0.0}
+#         ]
 #       }
 #     }
 #
@@ -50,9 +55,21 @@
 #   source_in       seconds into the source where the overlay begins (default 0)
 #   label           optional
 #
+# Fields (audio segment, A1+):
+#   timeline_start  seconds from sequence start (absolute)
+#   duration        seconds the audio covers
+#   source          absolute path to an audio file (mp3/wav/m4a/etc. readable by ffprobe)
+#   source_in       seconds into the source where the segment begins (default 0)
+#   label           optional
+#
 # V2+ tracks: absolute timeline positions, no `gap`, video-only (no linked audio),
-# rendered as full-frame replacement at 100% scale. The current sequence audio
-# track count and channel layout are computed from V1 sources only.
+# rendered as full-frame replacement at 100% scale.
+#
+# `audio` top-level key (optional): when present, the timeline's audio is exactly
+# what's in this block — V1's implicit audio is muted. Use this for AI-narrated
+# sizzle reels where V1 is purely visual and a separate narration track drives
+# the audio. When the `audio` key is absent, the current behavior (V1 video
+# clipitems link to their own audio on a single track) is preserved.
 #
 # Input path accepts `-` for stdin. Output path accepts `-` for stdout; if
 # omitted, the output path is derived from the input (`foo.json` → `foo.xml`).
@@ -167,7 +184,7 @@ with open(input_path) as f:
 # only), or {name, tracks: {V1: [...], V2: [...], ...}} (multi-track).
 def _track_key_to_int(k):
     s = str(k).strip().upper()
-    if s.startswith("V"):
+    if s.startswith("V") or s.startswith("A"):
         s = s[1:]
     return int(s)
 
@@ -195,6 +212,29 @@ else:
 
 if not tracks_in.get(1):
     sys.exit("Error: V1 has no segments.")
+
+# Optional `audio` block — when present, the timeline's audio is exactly what's
+# in this block (V1's implicit audio is muted).
+audio_tracks_in = {}
+if isinstance(raw, dict) and "audio" in raw:
+    audio_raw = raw["audio"]
+    if not isinstance(audio_raw, dict):
+        sys.exit("Error: 'audio' must be an object mapping track keys (A1, A2, ...) to segment lists.")
+    try:
+        audio_tracks_in = {_track_key_to_int(k): v for k, v in audio_raw.items()}
+    except ValueError:
+        sys.exit("Error: 'audio' keys must be A1, A2, ... or 1, 2, ...")
+    for tidx, segs in audio_tracks_in.items():
+        if not isinstance(segs, list):
+            sys.exit(f"Error: 'audio' track A{tidx} must be a list of segments.")
+        for seg in segs:
+            if "timeline_start" not in seg:
+                sys.exit(f"Error: audio segment missing 'timeline_start': {seg}")
+            if "duration" not in seg:
+                sys.exit(f"Error: audio segment missing 'duration': {seg}")
+            if not seg.get("source"):
+                sys.exit(f"Error: audio segment missing 'source': {seg}")
+has_explicit_audio = bool(audio_tracks_in)
 
 # ── Probe each unique source once (across all tracks) ────────────────────────
 def ffprobe_source(path):
@@ -237,6 +277,32 @@ def ffprobe_source(path):
         "channels": channels,
     }
 
+def ffprobe_audio_source(path):
+    if not os.path.isfile(path):
+        sys.exit(f"Error: audio source not found: {path}")
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries",
+        "stream=channels,sample_rate,codec_name:stream_tags=timecode:format=duration",
+        "-of", "json", path,
+    ]
+    aud = json.loads(subprocess.check_output(cmd))
+    a_stream = (aud.get("streams") or [{}])[0]
+    if not a_stream:
+        sys.exit(f"Error: audio source has no audio stream: {path}")
+    channels = int(a_stream.get("channels") or 2)
+    sample_rate = int(a_stream.get("sample_rate") or 48000)
+    tc = (a_stream.get("tags") or {}).get("timecode") or ""
+    duration = float((aud.get("format") or {}).get("duration") or 0.0)
+    return {
+        "path": path,
+        "channels": channels,
+        "sample_rate": sample_rate,
+        "timecode": tc,
+        "duration": duration,
+    }
+
 unique_sources = []
 seen = set()
 for track_idx, segs in tracks_in.items():
@@ -254,6 +320,18 @@ if not unique_sources:
     sys.exit("Error: no clip segments (only gaps).")
 
 probed = {p: ffprobe_source(p) for p in unique_sources}
+
+# Audio-only sources (from `audio` block) are probed separately. They have no
+# video stream and are excluded from the frame-rate / resolution check below.
+unique_audio_sources = []
+audio_seen = set()
+for track_idx, segs in audio_tracks_in.items():
+    for seg in segs:
+        src = seg["source"]
+        if src not in audio_seen:
+            audio_seen.add(src)
+            unique_audio_sources.append(src)
+audio_probed = {p: ffprobe_audio_source(p) for p in unique_audio_sources}
 
 # ── Enforce shared frame rate and resolution; name the offender if not ───────
 ref = probed[unique_sources[0]]
@@ -334,6 +412,9 @@ def normalize_tc(tc, path):
 
 # ── File IDs (shared per source across tracks) and per-(source, track) instance counts ─
 file_id_for = {p: f"{os.path.basename(p)} f" for p in unique_sources}
+for p in unique_audio_sources:
+    if p not in file_id_for:
+        file_id_for[p] = f"{os.path.basename(p)} f"
 instance_counter = {}  # (path, track) -> int
 
 # ── XML snippet helpers ──────────────────────────────────────────────────────
@@ -522,6 +603,33 @@ def file_block_full(path, src_meta):
                             </media>
                         </file>"""
 
+def file_block_audio_full(path, src_meta):
+    """File block for an audio-only source. No <video> in <media>."""
+    src_dur_frames = sec_to_frames(src_meta["duration"])
+    tc, tc_displayformat = normalize_tc(src_meta["timecode"], path)
+    fid = file_id_for[path]
+    name = os.path.basename(path)
+    return f"""<file id="{xml_escape(fid)}">
+                            <duration>{src_dur_frames}</duration>
+                            {RATE_BLOCK}
+                            <name>{xml_escape(name)}</name>
+                            <pathurl>{pathurl(path)}</pathurl>
+                            <timecode>
+                                <string>{tc}</string>
+                                <displayformat>{tc_displayformat}</displayformat>
+                                {RATE_BLOCK_TC}
+                            </timecode>
+                            <media>
+                                <audio>
+                                    <samplecharacteristics>
+                                        <samplerate>{src_meta["sample_rate"]}</samplerate>
+                                        <depth>16</depth>
+                                    </samplecharacteristics>
+                                    <channelcount>{src_meta["channels"]}</channelcount>
+                                </audio>
+                            </media>
+                        </file>"""
+
 # ── Walk segments per track and build clipitems ──────────────────────────────
 # `file_full_emitted` is keyed per-source (NOT per-(source, track)) — the full
 # <file> block emits once on the first occurrence of a source ACROSS ALL tracks;
@@ -591,7 +699,9 @@ for track_idx in sorted(tracks_in.keys()):
 
         # V2+ video clipitems carry NO <link> element. xmeml allows unlinked
         # clipitems; this avoids any dangling-ref hazard between tracks.
-        if track_idx == 1:
+        # When `audio` is provided explicitly, V1 video does NOT emit an audio
+        # link either — the V1 audio clipitem won't exist.
+        if track_idx == 1 and not has_explicit_audio:
             link_block = f"""                        <link>
                             <linkclipref>{xml_escape(vid_id)}</linkclipref>
                         </link>
@@ -620,7 +730,7 @@ for track_idx in sorted(tracks_in.keys()):
         all_end_frames.append(tl_end)
         total_clip_count += 1
 
-        if track_idx == 1:
+        if track_idx == 1 and not has_explicit_audio:
             a = f"""                    <clipitem id="{xml_escape(aud_id)}">
                         <name>{xml_escape(name)}</name>
                         <duration>{src_dur_frames}</duration>
@@ -646,7 +756,58 @@ for track_idx in sorted(tracks_in.keys()):
                         <comments/>
                     </clipitem>"""
             audio_tracks[1].append(a)
+        if track_idx == 1:
             timeline_pos = tl_end
+
+# Process explicit audio segments (Mode 1: narration on A1, V1 audio muted).
+if has_explicit_audio:
+    for track_idx in sorted(audio_tracks_in.keys()):
+        audio_tracks.setdefault(track_idx, [])
+        for seg in audio_tracks_in[track_idx]:
+            src = seg["source"]
+            meta = audio_probed[src]
+            name = os.path.basename(src)
+            tl_start_sec = float(seg["timeline_start"])
+            ss = float(seg.get("source_in", 0))
+            dur = float(seg["duration"])
+            tl_start = sec_to_frames(tl_start_sec)
+            dur_frames = sec_to_frames(dur)
+            src_in = sec_to_frames(ss)
+            src_out = src_in + dur_frames
+            tl_end = tl_start + dur_frames
+            src_dur_frames = sec_to_frames(meta["duration"])
+
+            key = (src, f"a{track_idx}")
+            inst = instance_counter.get(key, 0)
+            instance_counter[key] = inst + 1
+            aud_id = f"{name} a{track_idx}_{inst}"
+            fid = file_id_for[src]
+
+            if src not in file_full_emitted:
+                file_block = file_block_audio_full(src, meta)
+                file_full_emitted.add(src)
+            else:
+                file_block = f'<file id="{xml_escape(fid)}"/>'
+
+            a = f"""                    <clipitem id="{xml_escape(aud_id)}">
+                        <name>{xml_escape(name)}</name>
+                        <duration>{src_dur_frames}</duration>
+                        {RATE_BLOCK}
+                        <start>{tl_start}</start>
+                        <end>{tl_end}</end>
+                        <enabled>TRUE</enabled>
+                        <in>{src_in}</in>
+                        <out>{src_out}</out>
+                        {file_block}
+                        <sourcetrack>
+                            <mediatype>audio</mediatype>
+                            <trackindex>1</trackindex>
+                        </sourcetrack>
+{audio_filters(dur_frames)}
+                        <comments/>
+                    </clipitem>"""
+            audio_tracks[track_idx].append(a)
+            all_end_frames.append(tl_end)
 
 total_dur = max(all_end_frames) if all_end_frames else 0
 
@@ -663,7 +824,20 @@ for tidx in sorted(video_tracks.keys()):
     video_track_blocks.append(block)
 video_tracks_xml = chr(10).join(video_track_blocks)
 
-audio_clips_str = chr(10).join(audio_tracks.get(1, []))
+# Emit one <track> block per audio track index. When `audio_tracks` is
+# empty (no V1 audio AND no explicit audio block), still emit an empty A1
+# placeholder so Resolve's importer doesn't choke on a missing audio track.
+audio_track_indices = sorted(audio_tracks.keys()) if audio_tracks else [1]
+audio_track_blocks = []
+for tidx in audio_track_indices:
+    clips_str = chr(10).join(audio_tracks.get(tidx, []))
+    block = f"""                <track>
+{clips_str}
+                    <enabled>TRUE</enabled>
+                    <locked>FALSE</locked>
+                </track>"""
+    audio_track_blocks.append(block)
+audio_tracks_xml = chr(10).join(audio_track_blocks)
 
 xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE xmeml>
@@ -702,11 +876,7 @@ xml = f"""<?xml version="1.0" encoding="UTF-8"?>
                 </format>
             </video>
             <audio>
-                <track>
-{audio_clips_str}
-                    <enabled>TRUE</enabled>
-                    <locked>FALSE</locked>
-                </track>
+{audio_tracks_xml}
             </audio>
         </media>
     </sequence>
@@ -730,6 +900,8 @@ if tc_warned:
 
 if output_path != "-":
     dur_sec = total_dur * FRAMES_PER_SEC_DEN / FRAMES_PER_SEC_NUM
-    track_summary = ", ".join(f"V{t}={len(video_tracks[t])}" for t in sorted(video_tracks.keys()))
-    print(f"wrote {output_path}  ({total_clip_count} clips [{track_summary}], {dur_sec:.2f}s, timebase={timebase}, ntsc={ntsc_str})")
+    v_summary = ", ".join(f"V{t}={len(video_tracks[t])}" for t in sorted(video_tracks.keys()))
+    a_summary_parts = [f"A{t}={len(audio_tracks[t])}" for t in sorted(audio_tracks.keys()) if audio_tracks[t]]
+    a_summary = (", " + ", ".join(a_summary_parts)) if a_summary_parts else ""
+    print(f"wrote {output_path}  ({total_clip_count} clips [{v_summary}{a_summary}], {dur_sec:.2f}s, timebase={timebase}, ntsc={ntsc_str})")
 PYEOF
