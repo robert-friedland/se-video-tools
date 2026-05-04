@@ -43,6 +43,45 @@ One-shot skill that turns a folder of raw onsite footage into a Resolve-importab
 
 ---
 
+## Pipeline model — MAIN vs SUBAGENT phases
+
+Each phase below is tagged either **MAIN** (orchestrator runs it directly) or **SUBAGENT** (orchestrator dispatches the phase body to a fresh `Agent` and only sees a structured summary). This split keeps the orchestrator's context small over a long run; user-facing checkpoints stay on the main thread, and the noisy work (ffprobe loops, `/transcribe` output, `/analyze-video` frame extraction, `/sync-visual` sweeps, GPU renders) lives inside subagents that only return ≤200-word summaries.
+
+**SUBAGENT means dispatch via the `Agent` tool — a fresh context window.** It does NOT mean reading another Markdown file: a `Read` loads into the same conversation and defeats the purpose.
+
+### Dispatch contract (applies to every SUBAGENT phase)
+
+Dispatch one `Agent`. Pass it:
+- The body of the SUBAGENT phase section (the instructions to execute)
+- The relevant slice of `SIZZLE_PLAN.md` (prior phases' outputs the subagent needs)
+- The phase's `expected_artifacts:` list — files that MUST exist on disk for the phase to count as done
+
+The subagent must return a structured summary in this exact shape:
+
+```
+STATUS: ok | partial | failed
+ARTIFACTS_VERIFIED: yes | no — <which missing>
+SUMMARY: <≤200 words: what was done, key counts, per-item issues>
+ITEMS:
+  - <item-id>: ok | failed: <reason> | skipped: <reason>
+```
+
+After the subagent returns, the orchestrator MUST:
+
+1. Run a file-existence check (`test -s <path>`) against the phase's `expected_artifacts:` list. **Do not trust `STATUS` alone.**
+2. If all artifacts exist AND `STATUS: ok` AND the response parses: mark the phase `[x done]` in `SIZZLE_PLAN.md`.
+3. If any artifact is missing: mark `[!] verification-failed: <which missing>` and stop the run. Surface the subagent's `SUMMARY` to the user.
+4. If `STATUS: partial` or `failed`: write the per-item state from `ITEMS:` into `SIZZLE_PLAN.md` (item-level `[x]` / `[ ]` / `[!] failed: <reason>` markers) so a re-run can re-dispatch only the failed items. See "Per-item failure granularity" below.
+5. If the response doesn't match the structured shape at all: mark `[!] needs-review`, surface the raw response, and stop. Never auto-promote an unparseable run to `[x done]`. Terminal status set is two: `[x done]` (verified) or `[!] <label>` (needs human eyes).
+
+The orchestrator never extracts frames, never runs ffprobe loops, never reads a transcript, never tails a render log. It reads structured summaries and updates the state file.
+
+### Per-item failure granularity
+
+Phases that operate on N items (Phase 6 b-roll/pair descriptions, Phase 7 syncs, Phase 10 composites) record per-item state in `SIZZLE_PLAN.md` so a partial failure doesn't reset the whole phase. On resume, dispatch a subagent that handles only items still marked `[ ]` or `[!]`. The skeleton at the bottom of this file shows the shape per phase.
+
+---
+
 ## Phase 0 — Check for resumable state
 
 ```bash
@@ -61,7 +100,21 @@ If neither exists, create `$PLAN` with the skeleton at the bottom of this file a
 
 ---
 
+## Phase 0.5 — Resume-from-phase escape hatch
+
+If the user invokes `/sizzle resume-phase N` (or otherwise asks to "restart from Phase N with a fresh context"), the orchestrator:
+
+1. Confirm with `AskUserQuestion`: "This will discard intermediate state for Phase N and later (no source files are deleted, but checkboxes will be reset). Continue?"
+2. On confirmation, edit `SIZZLE_PLAN.md`: change every `[x done]` and per-item `[x]` from Phase N onward to `[ ]`. Per-item `[!] failed:` markers are also reset to `[ ]`. User-confirmed decisions recorded in earlier phases (mode, sync method, pairings, render selections) are NOT reset — they remain authoritative.
+3. Resume normally from Phase N. Because subagent dispatch is fresh-context, the new run starts with the orchestrator's working set = state file + this skill, regardless of how many turns the previous attempt accumulated.
+
+This is the user's escape hatch for "Claude got confused at Phase N." It is also the right move if a phase's on-disk artifacts have been manually edited and the recorded state is stale.
+
+---
+
 ## Phase 1 — Mode + scope
+
+**MODE:** MAIN — orchestrator runs this directly. `AskUserQuestion` prompts can't be delegated to a subagent.
 
 Ask the user, in order. Skip whichever is already in `SIZZLE_PLAN.md`.
 
@@ -84,6 +137,13 @@ Write all answers to `SIZZLE_PLAN.md` under `## Phase 1 — Mode + scope`. Mark 
 ---
 
 ## Phase 2 — Inventory
+
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/SIZZLE_PLAN.md` — Phase 2 section filled with the inventory table
+- `$TARGET/INVENTORY.md` — one row per top-level clip
+
+Dispatch one `Agent` with the body below as its prompt. The subagent runs the ffprobe loop and writes the tables; the orchestrator only sees the structured summary. Do NOT run ffprobe in the main thread.
 
 For every video in the target folder (non-recursive, top-level only — ignore anything already inside `interviews/`, `narration/`, `b-roll/`, or `perform/`):
 
@@ -109,6 +169,15 @@ Write a Phase 2 inventory table to `SIZZLE_PLAN.md`. Also write the human-readab
 ---
 
 ## Phase 3 — Classify
+
+**MODE:** SUBAGENT → MAIN checkpoint
+**Expected artifacts on success (subagent half):**
+- `$TARGET/SIZZLE_PLAN.md` — Phase 3 draft section with classification table
+- `$TARGET/INVENTORY.md` — `class` column populated
+- For Mode 2: `<interview>.transcript.sentences.json` next to each interview clip
+- For Mode 1 (if narration mp3 was provided): narration `.transcript.sentences.json`
+
+Dispatch one `Agent` to do the automated classification work below (run `/transcribe`, classify by signals, fan out `/analyze-video` in parallel for ambiguous cases). The subagent writes its draft classifications into `SIZZLE_PLAN.md` and `INVENTORY.md` and reports a structured summary. After it returns, the **MAIN orchestrator** runs the user checkpoint at the bottom of this section (show classification table, accept corrections) and only then marks Phase 3 `[x done]`.
 
 Run `transcribe` on the entire folder once. This is the speech-vs-not-speech classifier *and* it produces the transcripts Mode 2 needs in Phase 11. For Mode 1, also run it on the narration mp3 (unless its `.sentences.json` sidecar already exists — `transcribe` skips already-processed files by default, so a single folder pass covers both cases as long as the narration mp3 is reachable from a folder pass).
 
@@ -148,6 +217,12 @@ Write classifications to `SIZZLE_PLAN.md`. Update `INVENTORY.md`'s `class` colum
 
 ## Phase 4 — Pair iPad↔DJI
 
+**MODE:** SUBAGENT → MAIN checkpoint
+**Expected artifacts on success (subagent half):**
+- `$TARGET/SIZZLE_PLAN.md` — Phase 4 draft section with the pairing table + TZ correction note
+
+Dispatch one `Agent` to run the timestamp algorithm and the ambiguity-disambiguation `/analyze-video` fan-out described below. **The subagent does NOT move files** — pairings stay draft-only until the user checkpoint clears (this preserves the existing "no file moves before Phase 4 checkpoint" rule). After the subagent returns, the **MAIN orchestrator** runs the user checkpoint and marks Phase 4 `[x done, user-confirmed <date>]` only after approval.
+
 (Skip in Mode 1 if there are no iPad/DJI clips. Skip if neither performance nor iPad-screen clips were classified.)
 
 Treat timestamps as noisy:
@@ -171,6 +246,16 @@ After approval, mark Phase 4 `[x done, user-confirmed <date>]`.
 
 ## Phase 5 — Organize into folders
 
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/interviews/<name>.mp4` per interview (Mode 2) — moved, not copied
+- `$TARGET/narration/narration.mp3` (Mode 1) — moved from the source path supplied in Phase 1
+- `$TARGET/b-roll/<original_name>.<ext>` per b-roll clip — moved (renamed in Phase 6)
+- `$TARGET/perform/pair-N-<placeholder>/<dji>` and `<ipad>` per pair
+- `$TARGET/perform/<slug>/README.md` stub per pair / ipad-only folder
+
+Dispatch one `Agent` to perform the file moves driven by the approved Phase 4 plan. Pure mechanical work; no user input.
+
 Move (not copy) files:
 - Interview clips (Mode 2) → `interviews/`
 - Narration mp3 (Mode 1) → `narration/` (move the `.transcript.*` sidecars too if they were generated outside `$TARGET`)
@@ -185,6 +270,14 @@ Mark Phase 5 `[x done]`.
 ---
 
 ## Phase 6 — Describe (parallel `/analyze-video` fan-out)
+
+**MODE:** SUBAGENT (single driver that internally parallel-dispatches `/analyze-video`)
+**Expected artifacts on success:**
+- For each b-roll item: `b-roll/<slug>.mp4` (renamed) AND `b-roll/<slug>.meta.md`
+- For each pair / ipad-only item: `perform/<slug>/` (folder renamed) AND `perform/<slug>/README.md` filled with description
+- `INVENTORY.md` updated
+
+Dispatch one `Agent`. That subagent itself parallel-dispatches `/analyze-video` (one call per b-roll, one per pair) in a single message and collects all results before renaming files and writing meta sidecars. **Per-item granularity:** the subagent reports each item's outcome in its `ITEMS:` block; the orchestrator writes per-item state into `SIZZLE_PLAN.md` (see skeleton's Phase 6 section). On rerun, dispatch a Phase 6 subagent that handles only items still marked `[ ]` or `[!]` in the state file.
 
 Spawn one subagent per b-roll clip and one per pair (or ipad-only folder) **in parallel** (single message, multiple `Agent` calls).
 
@@ -232,6 +325,12 @@ Update `INVENTORY.md`. Mark Phase 6 `[x done]`.
 
 ## Phase 7 — Visual sync per pair (parallel `/sync-visual` fan-out)
 
+**MODE:** SUBAGENT (single driver that internally parallel-dispatches `/sync-visual`)
+**Expected artifacts on success (per pair not skipped):**
+- `perform/<slug>/README.md` — `Sync offset` and `Composite command` sections filled
+
+Dispatch one `Agent`. That subagent parallel-dispatches `/sync-visual` per paired folder in a single message. Per-item granularity applies (see Phase 6). If user answered "None" to sync method in Phase 1, skip the dispatch entirely and record `Phase 7: [skipped — sync=None]` in `SIZZLE_PLAN.md`.
+
 (Skip if user answered "None" to sync method in Phase 1.)
 
 Spawn one subagent per paired pair in parallel. Each subagent receives:
@@ -246,6 +345,8 @@ Mark each pair individually in `SIZZLE_PLAN.md` as its subagent returns. When al
 ---
 
 ## Phase 8 — Pick which pairs to render
+
+**MODE:** MAIN — `AskUserQuestion` multiSelect can't be delegated. ETA computation is a one-line inline calc.
 
 Show the user:
 
@@ -274,6 +375,14 @@ Use `AskUserQuestion` (multiSelect) to let the user pick which pairs to render. 
 ---
 
 ## Phase 9 — Sample sync verification (one pair at a time)
+
+**MODE:** MAIN, with a one-shot subagent per render. The render → ask → adjust → re-render loop is owned by the main thread (the user is in the loop). Only the actual `composite_bezel` 15-second sample render is dispatched to a subagent so the orchestrator never accumulates raw ffmpeg output.
+
+Per pair, per iteration:
+1. Dispatch one `Agent` whose only job is to run the `composite_bezel` command at step 3 below and verify `sync_sample.mp4` exists and is non-zero. Subagent returns a single line: `OK <abs path>` or `FAIL <reason>`.
+2. Main thread `open`s the sample and asks the user via `AskUserQuestion`.
+3. Apply the user's nudge (iPad early/late/way-off) to `bg`/`scr`, update the pair's `README.md`, re-dispatch the render subagent.
+4. Iterate until the user confirms.
 
 (Skip if user answered "None" to sync method.)
 
@@ -314,6 +423,14 @@ After all selected pairs are verified, mark Phase 9 `[x done]`.
 
 ## Phase 10 — Render composites (serial, NOT parallel)
 
+**MODE:** SUBAGENT (single driver, serial inside)
+**Expected artifacts on success:**
+- For each user-selected pair: `perform/<slug>/composite.mp4` (non-zero size)
+- For each user-selected ipad-only folder: `perform/<slug>/composite.mp4` (non-zero size)
+- `INVENTORY.md` — `composite?` column updated for rendered items
+
+Dispatch one `Agent`. That subagent loops over the user-selected items **serially** (Metal GPU contention) — it does NOT parallelize. After each render it appends to its accumulating `ITEMS:` list. Per-item granularity in `SIZZLE_PLAN.md` so a partial-failure rerun resumes from the failed item only. Orchestrator never tails ffmpeg.
+
 **Run serially.** `composite_bezel_gpu` is GPU-bound via Metal; concurrent runs contend for the same command queue and risk VRAM pressure on 4K HEVC.
 
 For each selected pair, in order:
@@ -340,6 +457,18 @@ At this point: `b-roll/<slug>.mp4` and `perform/<slug>/composite.mp4` are the *v
 ---
 
 ## Phase 11 — Build the cut list
+
+**MODE:** MIXED — SUBAGENT prep + MAIN beat-picking.
+
+**Prep subagent** (dispatch one `Agent` first):
+- Mode 1: read `narration/narration.transcript.sentences.json`. For each sentence, score every b-roll + composite description in `INVENTORY.md` by lexical overlap. Emit `cuts.draft.json` with each beat's top 3 candidate sources.
+- Mode 2: scan every interview's `.transcript.sentences.json` under `interviews/`. Filter sentences (≥1.5s, ≥10 words, low filler). For each candidate quote, score b-roll/composite descriptions. Emit `cuts.draft.json` with candidate quotes per interview, each scored against the visual inventory.
+- The prep subagent's job is **suggestions on disk, not decisions**.
+
+**Expected artifacts after prep:**
+- `$TARGET/cuts.draft.json` (non-zero size)
+
+**Then MAIN** orchestrator reads `cuts.draft.json` and walks beats with the user via `AskUserQuestion`. The visual-budget check, frame-rate / resolution check, and final `cuts.json` write all stay on the main thread (these are quick file probes, not noisy work). Mark Phase 11 `[x done]` only after `cuts.json` lands.
 
 Branch on the mode chosen in Phase 1.
 
@@ -430,6 +559,13 @@ After `cuts.json` is written, mark Phase 11 `[x done]`.
 
 ## Phase 12 — Build timeline
 
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/rough.xml` (non-zero size)
+- `SIZZLE_PLAN.md` — `Status: done` at top, Phase 12 section filled with duration / track counts
+
+Dispatch one `Agent` to run the mode-appropriate pipeline below and produce `rough.xml`. The orchestrator reads its summary and prints the user-facing "open in Resolve" instructions.
+
 Branch on mode:
 
 **Mode 1:**
@@ -453,14 +589,6 @@ Set `Status: done` at the top of `SIZZLE_PLAN.md`. Print a final summary:
 - A reminder that the per-pair `composite.mp4` files and `b-roll/*.mp4` are the visual inventory if the user wants to swap shots in Resolve.
 
 Mark Phase 12 `[x done]`.
-
----
-
-## Subagent strategy
-
-- **Parallel where possible**: Phase 3 (ambiguous classification), Phase 4 (ambiguous pairing), Phase 6 (description), Phase 7 (sync) all fan out subagents in a single message.
-- **Serial where required**: Phase 10 composite renders.
-- **Orchestrator never reads raw frames.** Subagents extract/read frames; they report back structured summaries.
 
 ---
 
@@ -497,10 +625,15 @@ Timezone correction applied: -7h
 ## Phase 5 — Organize  [ ]
 
 ## Phase 6 — Describe  [ ]
-- b-roll: <rename map: original → slug.mp4>
-- pair-1 → lab-sample-entry
-- pair-2 → lobby-checkin
-- ipad-only → tutorial-walkthrough
+b-roll:
+- IMG_1234.mov → lobby-exterior.mp4  [x]
+- IMG_5678.mov → [ ]
+- IMG_9012.mov → [!] failed: analyze-video timed out
+pairs:
+- pair-1 → lab-sample-entry  [x]
+- pair-2 → lobby-checkin  [ ]
+- ipad-only → tutorial-walkthrough  [ ]
+(On rerun, dispatch a Phase 6 subagent that handles only items still `[ ]` or `[!]`.)
 
 ## Phase 7 — Visual sync  [ ]
 - lab-sample-entry: bg=12.4 scr=8.1  [x]
