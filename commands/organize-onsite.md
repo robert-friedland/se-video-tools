@@ -27,7 +27,48 @@ You will produce, inside that folder:
 
 ---
 
+## Pipeline model — MAIN vs SUBAGENT phases
+
+Each phase below is tagged either **MAIN** (orchestrator runs it directly) or **SUBAGENT** (orchestrator dispatches the phase body to a fresh `Agent` and only sees a structured summary). This split keeps the orchestrator's context small over a long run; user-facing checkpoints stay on the main thread, and the noisy work (ffprobe loops, `/transcribe` output, `/analyze-video` frame extraction, `/sync-visual` sweeps, GPU renders) lives inside subagents that only return ≤200-word summaries.
+
+**SUBAGENT means dispatch via the `Agent` tool — a fresh context window.** It does NOT mean reading another Markdown file: a `Read` loads into the same conversation and defeats the purpose.
+
+### Dispatch contract (applies to every SUBAGENT phase)
+
+Dispatch one `Agent`. Pass it:
+- The body of the SUBAGENT phase section (the instructions to execute)
+- The relevant slice of `ORGANIZE_PLAN.md` (prior phases' outputs the subagent needs)
+- The phase's `expected_artifacts:` list — files that MUST exist on disk for the phase to count as done
+
+The subagent must return a structured summary in this exact shape:
+
+```
+STATUS: ok | partial | failed
+ARTIFACTS_VERIFIED: yes | no — <which missing>
+SUMMARY: <≤200 words: what was done, key counts, per-item issues>
+ITEMS:
+  - <item-id>: ok | failed: <reason> | skipped: <reason>
+```
+
+After the subagent returns, the orchestrator MUST:
+
+1. Run a file-existence check (`test -s <path>`) against the phase's `expected_artifacts:` list. **Do not trust `STATUS` alone.**
+2. If all artifacts exist AND `STATUS: ok` AND the response parses: mark the phase `[x done]` in `ORGANIZE_PLAN.md`.
+3. If any artifact is missing: mark `[!] verification-failed: <which missing>` and stop the run. Surface the subagent's `SUMMARY` to the user.
+4. If `STATUS: partial` or `failed`: write per-item state from `ITEMS:` into `ORGANIZE_PLAN.md` (item-level `[x]` / `[ ]` / `[!] failed: <reason>` markers) so a re-run can re-dispatch only the failed items. See "Per-item failure granularity" below.
+5. If the response doesn't match the structured shape at all: mark `[!] needs-review`, surface the raw response, and stop. Never auto-promote an unparseable run to `[x done]`. Terminal status set is two: `[x done]` (verified) or `[!] <label>` (needs human eyes).
+
+The orchestrator never extracts frames, never runs ffprobe loops, never reads a transcript, never tails a render log. It reads structured summaries and updates the state file.
+
+### Per-item failure granularity
+
+Phases that operate on N items (Phases 4 b-roll, 5 pair descriptions, 6 syncs, 7 composites) record per-item state in `ORGANIZE_PLAN.md` so a partial failure doesn't reset the whole phase. On resume, dispatch a subagent that handles only items still marked `[ ]` or `[!]`. The skeleton at the bottom of this file shows the shape per phase.
+
+---
+
 ## Phase -2 — Check for resumable state
+
+**MODE:** MAIN — orchestrator runs this directly. State-machine bootstrap; not delegated.
 
 ```bash
 TARGET="<folder>"
@@ -42,7 +83,21 @@ If `$PLAN` does not exist, create it with a skeleton (see "ORGANIZE_PLAN.md stru
 
 ---
 
+## Resume-from-phase escape hatch
+
+If the user invokes `/organize-onsite resume-phase N` (or otherwise asks to "restart from Phase N with a fresh context"), the orchestrator:
+
+1. Confirm with `AskUserQuestion`: "This will discard intermediate state for Phase N and later (no source files are deleted, but checkboxes will be reset). Continue?"
+2. On confirmation, edit `ORGANIZE_PLAN.md`: change every `[x done]` and per-item `[x]` from Phase N onward to `[ ]`. Per-item `[!] failed:` markers are also reset to `[ ]`. User-confirmed decisions recorded in earlier phases (sync method, pairings, render selections) are NOT reset — they remain authoritative.
+3. Resume normally from Phase N. Because subagent dispatch is fresh-context, the new run starts with the orchestrator's working set = state file + this skill, regardless of how many turns the previous attempt accumulated.
+
+This is the user's escape hatch for "Claude got confused at Phase N." It is also the right move if a phase's on-disk artifacts have been manually edited and the recorded state is stale.
+
+---
+
 ## Phase -1 — Ask about visual sync (only if not already recorded)
+
+**MODE:** MAIN — orchestrator runs this directly. `AskUserQuestion` prompts can't be delegated.
 
 Ask the user two questions. Skip whichever is already in `ORGANIZE_PLAN.md`.
 
@@ -62,6 +117,12 @@ Write both answers to `ORGANIZE_PLAN.md` under `## Sync method`. These are passe
 ---
 
 ## Phase 0 — Inventory
+
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/ORGANIZE_PLAN.md` — Phase 0 section filled with the inventory table
+
+Dispatch one `Agent` with the body below as its prompt. The subagent runs the ffprobe loop and writes the table; the orchestrator only sees the structured summary. Do NOT run ffprobe in the main thread.
 
 For every video in the target folder (non-recursive, top level only — ignore anything already inside `b-roll/` or `perform/`):
 
@@ -89,6 +150,12 @@ Write a Phase 0 table to `ORGANIZE_PLAN.md`. Mark `[x done]`.
 
 ## Phase 1 — Classify
 
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/ORGANIZE_PLAN.md` — Phase 1 section with classification table
+
+Dispatch one `Agent`. The subagent applies the deterministic rules below and parallel-fans-out `/analyze-video` for the ambiguous edge cases. The user checkpoint for Phases 1 + 2 is Phase 2.5; Phase 1 itself is a clean SUBAGENT dispatch with no inline checkpoint.
+
 Deterministic rules first. Only fall back to visual inspection (spawn parallel `analyze-video` subagents) for ambiguous clips.
 
 **iPad screen recording** (strong signals):
@@ -109,6 +176,12 @@ Write classifications to `ORGANIZE_PLAN.md`. Mark `[x done]`.
 
 ## Phase 2 — Pair iPad recordings with DJI performance clips
 
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/ORGANIZE_PLAN.md` — Phase 2 draft section with pairing table + TZ correction note
+
+Dispatch one `Agent`. The subagent runs the timestamp algorithm + ambiguity-disambiguation `/analyze-video` fan-out. **The subagent does NOT move files** — pairings stay draft-only until the Phase 2.5 user checkpoint clears.
+
 Treat timestamps as noisy:
 - iPad `creation_time` ≈ recording **end** → iPad_start = creation_time − duration
 - DJI `creation_time` ≈ recording **start**, but the DJI has no wifi/GPS timezone sync, so its clock may be offset by a whole number of hours (timezone drift) from the iPad
@@ -127,6 +200,8 @@ Write pairing decisions to `ORGANIZE_PLAN.md` (do not mark `[x done]` yet — wa
 ---
 
 ## Phase 2.5 — Checkpoint: confirm classification & pairing with user
+
+**MODE:** MAIN — orchestrator runs this directly. User approval gate; not delegated.
 
 Show a table:
 
@@ -151,6 +226,14 @@ Wait for user approval. If they correct anything, update the pairing table and r
 
 ## Phase 3 — Organize into folders
 
+**MODE:** SUBAGENT
+**Expected artifacts on success:**
+- `$TARGET/b-roll/<original_name>.<ext>` per b-roll clip — moved (renamed in Phase 4)
+- `$TARGET/perform/pair-N-<placeholder>/<dji>` and `<ipad>` per pair
+- `$TARGET/perform/<...>/README.md` stub per pair / ipad-only folder
+
+Dispatch one `Agent` to perform the file moves driven by the approved Phase 2.5 plan. Pure mechanical work; no user input.
+
 Move (not copy) files:
 - b-roll clips → `b-roll/` (still with original names; Phase 4 renames them)
 - Each pair → `perform/pair-N-<placeholder>/` (slug will be filled in Phase 5; for now use `pair-N`)
@@ -164,6 +247,12 @@ Mark Phase 3 `[x done]`.
 
 ## Phase 4 — Describe & rename b-roll (parallel subagents)
 
+**MODE:** SUBAGENT (single driver that internally parallel-dispatches `/analyze-video`)
+**Expected artifacts on success (per b-roll item):**
+- `b-roll/<slug>.<ext>` (renamed)
+
+Dispatch one `Agent`. That subagent itself parallel-dispatches `/analyze-video` (one call per b-roll clip) in a single message and collects results before renaming files. Per-item granularity: the subagent reports each item's outcome in its `ITEMS:` block; the orchestrator writes per-item state into `ORGANIZE_PLAN.md`. On rerun, dispatch a Phase 4 subagent that handles only items still `[ ]` or `[!]`.
+
 Spawn one `general-purpose` subagent per b-roll clip **in parallel** (single message, multiple `Agent` calls). Each subagent:
 1. Runs `/analyze-video` on its clip (extracting ~10 frames is enough — this is low-fidelity).
 2. Returns a short kebab-case slug (3–5 words, e.g. `lobby-exterior-wide`) and a 1-sentence description.
@@ -173,6 +262,12 @@ When all return, rename each b-roll file in place (`b-roll/<slug>.mp4`, preservi
 ---
 
 ## Phase 5 — Describe each pair → README.md + folder slug (parallel subagents)
+
+**MODE:** SUBAGENT (single driver that internally parallel-dispatches `/analyze-video`)
+**Expected artifacts on success (per pair / ipad-only item):**
+- `perform/<slug>/` (folder renamed) AND `perform/<slug>/README.md` filled with description
+
+Dispatch one `Agent`. That subagent parallel-dispatches `/analyze-video` per pair / ipad-only folder in a single message. Per-item granularity applies (see Phase 4).
 
 Spawn one subagent per pair in parallel. Each subagent:
 1. Runs `/analyze-video` on both clips (can internally parallelize the two if useful).
@@ -205,6 +300,12 @@ For ipad-only folders: same treatment (one subagent, `README.md`, slug rename) �
 
 ## Phase 6 — Visual sync per pair (parallel subagents)
 
+**MODE:** SUBAGENT (single driver that internally parallel-dispatches `/sync-visual`)
+**Expected artifacts on success (per pair not skipped):**
+- `perform/<slug>/README.md` — `Sync offset` and `Composite command` sections filled
+
+Dispatch one `Agent`. That subagent parallel-dispatches `/sync-visual` per paired folder in a single message. Per-item granularity applies (see Phase 4). If user answered "None" to sync method in Phase -1, skip the dispatch entirely and record `Phase 6: [skipped — sync=None]` in `ORGANIZE_PLAN.md`.
+
 Spawn one subagent per paired pair in parallel. Each subagent receives:
 - The two file paths
 - The **sync method** from Phase -1 (so it knows to hunt for stopwatch digits vs. button-tap transitions)
@@ -219,6 +320,8 @@ Mark pairs individually in `ORGANIZE_PLAN.md` as each subagent returns.
 ---
 
 ## Phase 6.5 — Checkpoint: review pairs & pick which to composite
+
+**MODE:** MAIN — `AskUserQuestion` multiSelect can't be delegated. ETA computation is a one-line inline calc.
 
 Show the user:
 
@@ -247,6 +350,14 @@ Use `AskUserQuestion` (multiSelect) to let the user pick which pairs to render. 
 ---
 
 ## Phase 6.75 — Sample sync verification (one pair at a time)
+
+**MODE:** MAIN, with a one-shot subagent per render. The render → ask → adjust → re-render loop is owned by the main thread (the user is in the loop). Only the actual `composite_bezel` 15-second sample render is dispatched to a subagent so the orchestrator never accumulates raw ffmpeg output.
+
+Per pair, per iteration:
+1. Dispatch one `Agent` whose only job is to run the `composite_bezel` command at step 3 below and verify `sync_sample.mp4` exists and is non-zero. Subagent returns a single line: `OK <abs path>` or `FAIL <reason>`.
+2. Main thread `open`s the sample and asks the user via `AskUserQuestion`.
+3. Apply the user's nudge (iPad early/late/way-off) to `bg`/`scr`, update the pair's `README.md`, re-dispatch the render subagent.
+4. Iterate until the user confirms.
 
 Before spending GPU time on full-length renders, verify every selected pair's sync point by generating a short sample composite (~15 s around the sync event) and having the user eyeball it.
 
@@ -297,6 +408,13 @@ After all selected pairs are verified, mark Phase 6.75 `[x done]` in `ORGANIZE_P
 
 ## Phase 7 — Composite (serial, NOT parallel)
 
+**MODE:** SUBAGENT (single driver, serial inside)
+**Expected artifacts on success:**
+- For each user-selected pair: `perform/<slug>/composite.mp4` (non-zero size)
+- For each user-selected ipad-only folder: `perform/<slug>/composite.mp4` (non-zero size)
+
+Dispatch one `Agent`. That subagent loops over the user-selected items **serially** (Metal GPU contention) — it does NOT parallelize. Per-item granularity in `ORGANIZE_PLAN.md` so a partial-failure rerun resumes from the failed item only. Orchestrator never tails ffmpeg.
+
 **Run serially.** `composite_bezel_gpu` is GPU-bound via Metal; concurrent runs contend for the same command queue and risk VRAM pressure on 4K HEVC. Serial is as fast or faster and gives deterministic ETAs.
 
 For each selected pair, in order:
@@ -319,14 +437,6 @@ ipad_bezel "<folder>/<ipad_file>" "<folder>/composite.mp4"
 After each render, verify `composite.mp4` exists and is non-zero, then mark that pair `[x done]` in `ORGANIZE_PLAN.md`. Report progress between renders (e.g. "Pair 1/3 done in 6m18s, starting Pair 2/3").
 
 When everything is done, set `Status: done` at the top of `ORGANIZE_PLAN.md` and print a final summary with each composite's path and size.
-
----
-
-## Subagent strategy
-
-- **Parallel where possible**: Phases 4, 5, 6 fan out subagents for all items at once (single message, multiple `Agent` tool calls). Orchestrator context stays small.
-- **Serial where required**: Phase 7 composites.
-- **Orchestrator never reads raw frames.** Only subagents extract/read frames; they report back structured summaries (slug, description, sync line).
 
 ---
 
@@ -361,13 +471,15 @@ User confirmed: <date>
 ## Organize (Phase 3)  [ ]
 
 ## B-roll rename (Phase 4)  [ ]
-- DJI_0042.mov → lobby-exterior-wide.mp4
-- ...
+- DJI_0042.mov → lobby-exterior-wide.mp4  [x]
+- DJI_0051.mov → [ ]
+- DJI_0058.mov → [!] failed: analyze-video timed out
+(On rerun, dispatch a Phase 4 subagent that handles only items still `[ ]` or `[!]`.)
 
 ## Pair descriptions (Phase 5)  [ ]
-- pair-1 → lab-sample-entry
-- pair-2 → lobby-checkin
-- ipad-only → tutorial-walkthrough
+- pair-1 → lab-sample-entry  [x]
+- pair-2 → lobby-checkin  [ ]
+- ipad-only → tutorial-walkthrough  [ ]
 
 ## Sync offsets (Phase 6)
 - lab-sample-entry: bg=12.4 scr=8.1  [x]
